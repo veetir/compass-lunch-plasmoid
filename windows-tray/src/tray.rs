@@ -1,0 +1,306 @@
+use crate::app::AppState;
+use crate::log::log_line;
+use crate::util::to_wstring;
+use std::path::{Path, PathBuf};
+use windows::core::PCWSTR;
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
+use windows::Win32::UI::Shell::{
+    Shell_NotifyIconW, NOTIFYICONDATAW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
+    NIM_SETVERSION, NOTIFYICON_VERSION_4,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    AppendMenuW, CreatePopupMenu, GetCursorPos, LoadIconW, LoadImageW, PostMessageW,
+    SetForegroundWindow, TrackPopupMenu, HICON, HMENU, IMAGE_ICON, LR_DEFAULTSIZE,
+    LR_LOADFROMFILE, MF_CHECKED, MF_DISABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
+    TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_NULL,
+};
+use windows::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
+
+pub const CMD_RESTAURANT_0437: u16 = 2001;
+pub const CMD_RESTAURANT_0439: u16 = 2002;
+pub const CMD_RESTAURANT_0436: u16 = 2003;
+pub const CMD_LANGUAGE_FI: u16 = 2101;
+pub const CMD_LANGUAGE_EN: u16 = 2102;
+pub const CMD_TOGGLE_SHOW_PRICES: u16 = 2201;
+pub const CMD_TOGGLE_DARK_MODE: u16 = 2202;
+pub const CMD_TOGGLE_HIDE_ALLERGENS: u16 = 2203;
+pub const CMD_TOGGLE_STARTUP: u16 = 2204;
+pub const CMD_REFRESH_NOW: u16 = 2301;
+pub const CMD_REFRESH_OFF: u16 = 2400;
+pub const CMD_REFRESH_60: u16 = 2401;
+pub const CMD_REFRESH_240: u16 = 2402;
+pub const CMD_REFRESH_1440: u16 = 2403;
+pub const CMD_QUIT: u16 = 2999;
+
+pub fn add_tray_icon(hwnd: HWND, callback_message: u32) -> anyhow::Result<()> {
+    unsafe {
+        let icon = load_icon();
+        let mut data = NOTIFYICONDATAW::default();
+        data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+        data.hWnd = hwnd;
+        data.uID = 1;
+        data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+        data.uCallbackMessage = callback_message;
+        data.hIcon = icon;
+        let tip = to_wstring("Compass Lunch");
+        let mut sz_tip = [0u16; 128];
+        for (idx, ch) in tip.iter().enumerate().take(sz_tip.len() - 1) {
+            sz_tip[idx] = *ch;
+        }
+        data.szTip = sz_tip;
+
+        let ok = Shell_NotifyIconW(NIM_ADD, &mut data).as_bool();
+        if !ok {
+            return Err(anyhow::anyhow!("Shell_NotifyIconW NIM_ADD failed"));
+        }
+        data.Anonymous.uVersion = NOTIFYICON_VERSION_4;
+        let _ = Shell_NotifyIconW(NIM_SETVERSION, &mut data);
+    }
+    Ok(())
+}
+
+pub fn remove_tray_icon(hwnd: HWND) {
+    unsafe {
+        let mut data = NOTIFYICONDATAW::default();
+        data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+        data.hWnd = hwnd;
+        data.uID = 1;
+        let _ = Shell_NotifyIconW(NIM_DELETE, &mut data);
+    }
+}
+
+fn load_icon() -> HICON {
+    if let Some(icon) = load_icon_from_resource() {
+        log_line("using tray icon from resources");
+        return icon;
+    }
+    if let Some(path) = find_icon_path() {
+        if let Some(icon) = load_icon_from_file(&path) {
+            log_line(&format!("using tray icon: {}", path.display()));
+            return icon;
+        }
+    }
+    unsafe { LoadIconW(None, PCWSTR(32512u16 as *const u16)).unwrap_or_default() }
+}
+
+fn load_icon_from_resource() -> Option<HICON> {
+    let hinstance = unsafe { GetModuleHandleW(None) }.ok()?;
+    unsafe {
+        let handle = LoadImageW(
+            hinstance,
+            PCWSTR(1u16 as *const u16),
+            IMAGE_ICON,
+            0,
+            0,
+            LR_DEFAULTSIZE,
+        )
+        .ok()?;
+        Some(HICON(handle.0))
+    }
+}
+
+fn load_icon_from_file(path: &Path) -> Option<HICON> {
+    let wide = to_wstring(path.to_string_lossy().as_ref());
+    unsafe {
+        let handle = LoadImageW(
+            None,
+            PCWSTR(wide.as_ptr()),
+            IMAGE_ICON,
+            0,
+            0,
+            LR_LOADFROMFILE | LR_DEFAULTSIZE,
+        )
+        .ok()?;
+        Some(HICON(handle.0))
+    }
+}
+
+fn find_icon_path() -> Option<PathBuf> {
+    let mut buffer = [0u16; 260];
+    let len = unsafe { GetModuleFileNameW(None, &mut buffer) } as usize;
+    if len == 0 {
+        return None;
+    }
+    let exe = String::from_utf16_lossy(&buffer[..len]);
+    let exe_path = PathBuf::from(exe);
+    let exe_dir = exe_path.parent()?.to_path_buf();
+
+    let candidates = [
+        exe_dir.join("assets").join("icon.ico"),
+        exe_dir.join("..").join("assets").join("icon.ico"),
+        exe_dir.join("..").join("..").join("assets").join("icon.ico"),
+        exe_dir.join("..").join("..").join("..").join("assets").join("icon.ico"),
+    ];
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+pub fn show_context_menu(hwnd: HWND, state: &AppState) {
+    unsafe {
+        let menu = build_context_menu(state);
+        let mut pt = POINT::default();
+        if GetCursorPos(&mut pt).is_ok() {
+            SetForegroundWindow(hwnd);
+            TrackPopupMenu(
+                menu,
+                TPM_LEFTALIGN | TPM_RIGHTBUTTON,
+                pt.x,
+                pt.y,
+                0,
+                hwnd,
+                None,
+            );
+            let _ = PostMessageW(hwnd, WM_NULL, WPARAM(0), LPARAM(0));
+        }
+    }
+}
+
+fn build_context_menu(state: &AppState) -> HMENU {
+    unsafe {
+        let menu = CreatePopupMenu().expect("CreatePopupMenu");
+
+        let restaurant_menu = CreatePopupMenu().expect("CreatePopupMenu");
+        append_menu_item(
+            restaurant_menu,
+            CMD_RESTAURANT_0437,
+            "Snellmania",
+            state.settings.restaurant_code == "0437",
+        );
+        append_menu_item(
+            restaurant_menu,
+            CMD_RESTAURANT_0439,
+            "Tietoteknia",
+            state.settings.restaurant_code == "0439",
+        );
+        append_menu_item(
+            restaurant_menu,
+            CMD_RESTAURANT_0436,
+            "Canthia",
+            state.settings.restaurant_code == "0436",
+        );
+        let _ = AppendMenuW(
+            menu,
+            MF_POPUP,
+            restaurant_menu.0 as usize,
+            PCWSTR(to_wstring("Restaurant").as_ptr()),
+        );
+
+        let language_menu = CreatePopupMenu().expect("CreatePopupMenu");
+        append_menu_item(
+            language_menu,
+            CMD_LANGUAGE_FI,
+            "Suomi",
+            state.settings.language == "fi",
+        );
+        append_menu_item(
+            language_menu,
+            CMD_LANGUAGE_EN,
+            "English",
+            state.settings.language == "en",
+        );
+        let _ = AppendMenuW(
+            menu,
+            MF_POPUP,
+            language_menu.0 as usize,
+            PCWSTR(to_wstring("Language").as_ptr()),
+        );
+
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+
+        append_menu_toggle(
+            menu,
+            CMD_TOGGLE_SHOW_PRICES,
+            "Show prices",
+            state.settings.show_prices,
+        );
+        append_menu_toggle(
+            menu,
+            CMD_TOGGLE_HIDE_ALLERGENS,
+            "Hide allergens",
+            state.settings.hide_allergens,
+        );
+        append_menu_toggle(
+            menu,
+            CMD_TOGGLE_DARK_MODE,
+            "Dark mode",
+            state.settings.dark_mode,
+        );
+        append_menu_toggle(
+            menu,
+            CMD_TOGGLE_STARTUP,
+            "Run at startup",
+            crate::startup::is_enabled(),
+        );
+
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+
+        append_menu_item(menu, CMD_REFRESH_NOW, "Refresh now", false);
+
+        let refresh_menu = CreatePopupMenu().expect("CreatePopupMenu");
+        append_menu_item(
+            refresh_menu,
+            CMD_REFRESH_OFF,
+            "Off",
+            state.settings.refresh_minutes == 0,
+        );
+        append_menu_item(
+            refresh_menu,
+            CMD_REFRESH_60,
+            "60 minutes",
+            state.settings.refresh_minutes == 60,
+        );
+        append_menu_item(
+            refresh_menu,
+            CMD_REFRESH_240,
+            "240 minutes",
+            state.settings.refresh_minutes == 240,
+        );
+        append_menu_item(
+            refresh_menu,
+            CMD_REFRESH_1440,
+            "1440 minutes",
+            state.settings.refresh_minutes == 1440,
+        );
+        let _ = AppendMenuW(
+            menu,
+            MF_POPUP,
+            refresh_menu.0 as usize,
+            PCWSTR(to_wstring("Auto refresh").as_ptr()),
+        );
+
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        append_menu_item(menu, CMD_QUIT, "Quit", false);
+
+        menu
+    }
+}
+
+fn append_menu_item(menu: HMENU, id: u16, label: &str, checked: bool) {
+    unsafe {
+        let flags = if checked { MF_STRING | MF_CHECKED } else { MF_STRING };
+        let _ = AppendMenuW(menu, flags, id as usize, PCWSTR(to_wstring(label).as_ptr()));
+    }
+}
+
+fn append_menu_toggle(menu: HMENU, id: u16, label: &str, enabled: bool) {
+    unsafe {
+        let flags = if enabled { MF_STRING | MF_CHECKED } else { MF_STRING };
+        let _ = AppendMenuW(menu, flags, id as usize, PCWSTR(to_wstring(label).as_ptr()));
+    }
+}
+
+pub fn disabled_menu_item(menu: HMENU, label: &str) {
+    unsafe {
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING | MF_DISABLED | MF_GRAYED,
+            0,
+            PCWSTR(to_wstring(label).as_ptr()),
+        );
+    }
+}
