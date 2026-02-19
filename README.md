@@ -1,6 +1,6 @@
-# Compass Lunch Plasmoid (Plasma 5)
+# Compass Lunch Plasmoid
 
-System tray oriented KDE Plasma 5 widget for Compass Group Kuopio lunch menus.
+System tray oriented KDE Plasma widget for Compass Group Kuopio lunch menus.
 
 ## Features
 
@@ -13,27 +13,40 @@ System tray oriented KDE Plasma 5 widget for Compass Group Kuopio lunch menus.
 
 ## Screenshot
 
-![Compass Lunch screenshot](docs/image.png)
+![Compass Lunch screenshot](plasma5/docs/image.png)
 
 ## Install / Update / Remove
 
-Install:
+Check Plasma version:
+
+```bash
+plasmashell --version
+```
+
+Clone once:
 
 ```bash
 git clone https://github.com/veetir/compass-lunch-plasmoid.git
 cd compass-lunch-plasmoid
-kpackagetool5 -t Plasma/Applet -i "$PWD"
+```
+
+Install (Plasma 6):
+
+```bash
+kpackagetool6 -t Plasma/Applet -i "$PWD/plasma6"
 ```
 
 Upgrade existing install:
 
 ```bash
 git pull
-kpackagetool5 -t Plasma/Applet -u "$PWD"
+kpackagetool6 -t Plasma/Applet -u "$PWD/plasma6"
 ```
 
 Remove:
 
 ```bash
-kpackagetool5 -t Plasma/Applet -r compass-lunch
+kpackagetool6 -t Plasma/Applet -r compass-lunch
 ```
+
+On Plasma 5, run the same commands but use `kpackagetool5` and `"$PWD/plasma5"` instead.
