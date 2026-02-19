@@ -50,3 +50,16 @@ kpackagetool6 -t Plasma/Applet -r compass-lunch
 ```
 
 On Plasma 5, run the same commands but use `kpackagetool5` and `"$PWD/plasma5"` instead.
+
+## Windows version
+
+See [Releases](https://github.com/veetir/compass-lunch-plasmoid/releases) for
+exe downloads.
+
+### Features
+* Cycle between restaurants by clicking
+* Run at startup 
+* Dark/light mode
+* Togglable allergens & prices
+
+![Compass Lunch screenshot](windows-tray/assets/windows.jpg)
