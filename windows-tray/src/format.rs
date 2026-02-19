@@ -100,16 +100,18 @@ pub fn split_component_suffix(component: &str) -> (String, String) {
     if text.is_empty() {
         return (String::new(), String::new());
     }
-    if let Some(idx) = text.rfind(' ') {
-        let (main, suffix) = text.split_at(idx);
-        let suffix = suffix.trim();
-        if suffix.starts_with('(') && suffix.ends_with(')') {
+    let trimmed = text.trim();
+    if let Some(idx) = trimmed.rfind('(') {
+        if trimmed.ends_with(')') {
+            let (main, suffix) = trimmed.split_at(idx);
+            let main = main.trim();
+            let suffix = suffix.trim();
             let open_count = suffix.chars().filter(|c| *c == '(').count();
             let close_count = suffix.chars().filter(|c| *c == ')').count();
-            if open_count == 1 && close_count == 1 {
+            if open_count == 1 && close_count == 1 && !main.is_empty() {
                 return (normalize_text(main), normalize_text(suffix));
             }
         }
     }
-    (text, String::new())
+    (trimmed.to_string(), String::new())
 }
