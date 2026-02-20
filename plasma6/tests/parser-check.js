@@ -73,6 +73,66 @@ function readFixture(name) {
   return JSON.parse(raw);
 }
 
+function readTextFixture(name) {
+  const fixturePath = path.join(__dirname, "fixtures", name);
+  return fs.readFileSync(fixturePath, "utf8");
+}
+
+function decodeHtmlEntities(value) {
+  return String(value)
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/&#([0-9]+);/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)))
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ");
+}
+
+function stripHtmlText(value) {
+  return normalizeText(decodeHtmlEntities(String(value).replace(/<[^>]*>/g, " ")));
+}
+
+function parseAntellSections(htmlText) {
+  const sections = [];
+  const sectionRegex = /<section class="menu-section">([\s\S]*?)<\/section>/gi;
+  let sectionMatch;
+
+  while ((sectionMatch = sectionRegex.exec(String(htmlText))) !== null) {
+    const sectionHtml = sectionMatch[1];
+    const titleMatch = sectionHtml.match(/<h2 class="menu-title">([\s\S]*?)<\/h2>/i);
+    const priceMatch = sectionHtml.match(/<h2 class="menu-price">([\s\S]*?)<\/h2>/i);
+    const listMatch = sectionHtml.match(/<ul class="menu-list">([\s\S]*?)<\/ul>/i);
+
+    const title = stripHtmlText(titleMatch ? titleMatch[1] : "");
+    const price = stripHtmlText(priceMatch ? priceMatch[1] : "");
+    const listHtml = listMatch ? listMatch[1] : "";
+
+    const items = [];
+    const itemRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
+    let itemMatch;
+    while ((itemMatch = itemRegex.exec(listHtml)) !== null) {
+      const item = stripHtmlText(itemMatch[1]);
+      if (item) {
+        items.push(item);
+      }
+    }
+
+    if (items.length === 0) {
+      continue;
+    }
+
+    sections.push({
+      title: title || "Menu",
+      price,
+      items,
+    });
+  }
+
+  return sections;
+}
+
 function checkFixture(name, expectedMenuName) {
   const payload = readFixture(name);
 
@@ -98,10 +158,37 @@ function checkFixture(name, expectedMenuName) {
   assert(closedDay.lunchTime === "", `${name}: expected empty lunchTime on 2026-02-22`);
 }
 
+function checkAntellFixture(name, expectedFirstTitle, expectedFirstItem, expectedSections) {
+  const html = readTextFixture(name);
+  const sections = parseAntellSections(html);
+
+  assert(sections.length === expectedSections, `${name}: expected ${expectedSections} parsed sections, got ${sections.length}`);
+  assert(sections[0].title === expectedFirstTitle, `${name}: unexpected first title: ${sections[0].title}`);
+  assert(sections[0].items[0] === expectedFirstItem, `${name}: unexpected first item: ${sections[0].items[0]}`);
+
+  for (const section of sections) {
+    for (const item of section.items) {
+      assert(item.length > 0, `${name}: empty parsed item`);
+    }
+  }
+}
+
 function main() {
   checkFixture("output-en.json", "Lunch");
   checkFixture("output-fi.json", "Annosruoka");
-  process.stdout.write("Parser checks passed for output-en.json and output-fi.json\n");
+  checkAntellFixture(
+    "antell-highway-friday-snippet.html",
+    "Pääruoaksi",
+    "Hoisin-kastikkeella maustettuja nyhtöpossuhodareita (A, L, M)",
+    3
+  );
+  checkAntellFixture(
+    "antell-round-friday-snippet.html",
+    "Kotiruokalounas",
+    "Perinteiset lihapyörykät mummonkastikkeella(G oma)",
+    3
+  );
+  process.stdout.write("Parser checks passed for Compass and Antell fixtures\n");
 }
 
 main();

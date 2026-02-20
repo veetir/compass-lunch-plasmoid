@@ -25,6 +25,9 @@
     <entry name="iconName" type="String">
       <default>food</default>
     </entry>
+    <entry name="enableAntellRestaurants" type="Bool">
+      <default>false</default>
+    </entry>
     <entry name="showAllergens" type="Bool">
       <default>true</default>
     </entry>

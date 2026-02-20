@@ -11,11 +11,16 @@ PlasmoidItem {
     id: root
 
     property string apiBaseUrl: "https://www.compass-group.fi/menuapi/feed/json"
-    property var restaurantCatalog: [
-        { code: "0437", fallbackName: "Snellmania" },
-        { code: "0439", fallbackName: "Tietoteknia" },
-        { code: "0436", fallbackName: "Canthia" }
+    property var baseRestaurantCatalog: [
+        { code: "0437", fallbackName: "Snellmania", provider: "compass" },
+        { code: "0439", fallbackName: "Tietoteknia", provider: "compass" },
+        { code: "0436", fallbackName: "Canthia", provider: "compass" }
     ]
+    property var antellRestaurantCatalog: [
+        { code: "antell-highway", fallbackName: "Antell Highway", provider: "antell", antellSlug: "highway", antellUrlBase: "https://antell.fi/lounas/kuopio/highway/" },
+        { code: "antell-round", fallbackName: "Antell Round", provider: "antell", antellSlug: "round", antellUrlBase: "https://antell.fi/lounas/kuopio/round/" }
+    ]
+    property var restaurantCatalog: configEnableAntellRestaurants ? baseRestaurantCatalog.concat(antellRestaurantCatalog) : baseRestaurantCatalog
 
     property var restaurantStates: ({})
     property var requestSerialByCode: ({})
@@ -34,6 +39,7 @@ PlasmoidItem {
         var raw = String(Plasmoid.configuration.language || "fi").toLowerCase()
         return raw === "en" ? "en" : "fi"
     }
+    property bool configEnableAntellRestaurants: !!Plasmoid.configuration.enableAntellRestaurants
     property bool configEnableWheelCycle: Plasmoid.configuration.enableWheelCycle !== false
     property int configRefreshMinutes: {
         var raw = Number(Plasmoid.configuration.refreshMinutes)
@@ -78,6 +84,16 @@ PlasmoidItem {
         var normalized = String(code || "")
         var codes = restaurantCodes()
         return codes.indexOf(normalized) >= 0
+    }
+
+    function restaurantEntryForCode(code) {
+        var normalized = String(code || "")
+        for (var i = 0; i < restaurantCatalog.length; i++) {
+            if (String(restaurantCatalog[i].code) === normalized) {
+                return restaurantCatalog[i]
+            }
+        }
+        return null
     }
 
     function restaurantLabelForCode(code) {
@@ -178,6 +194,109 @@ PlasmoidItem {
         return year + "-" + month + "-" + day
     }
 
+    function weekdayToken(dateObj) {
+        var names = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
+        return names[dateObj.getDay()] || "monday"
+    }
+
+    function decodeHtmlEntities(text) {
+        return String(text || "")
+            .replace(/&#x([0-9a-fA-F]+);/g, function(_, hex) {
+                return String.fromCharCode(parseInt(hex, 16))
+            })
+            .replace(/&#([0-9]+);/g, function(_, dec) {
+                return String.fromCharCode(parseInt(dec, 10))
+            })
+            .replace(/&amp;/g, "&")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/&quot;/g, "\"")
+            .replace(/&#39;/g, "'")
+            .replace(/&nbsp;/g, " ")
+    }
+
+    function stripHtmlText(rawHtml) {
+        var withoutTags = String(rawHtml || "").replace(/<[^>]*>/g, " ")
+        return MenuFormatter.normalizeText(decodeHtmlEntities(withoutTags))
+    }
+
+    function parseAntellSections(htmlText) {
+        var sections = []
+        var sectionRegex = /<section class="menu-section">([\s\S]*?)<\/section>/gi
+        var sectionMatch
+
+        while ((sectionMatch = sectionRegex.exec(String(htmlText || ""))) !== null) {
+            var sectionHtml = sectionMatch[1]
+            var titleMatch = sectionHtml.match(/<h2 class="menu-title">([\s\S]*?)<\/h2>/i)
+            var priceMatch = sectionHtml.match(/<h2 class="menu-price">([\s\S]*?)<\/h2>/i)
+            var listMatch = sectionHtml.match(/<ul class="menu-list">([\s\S]*?)<\/ul>/i)
+
+            var title = stripHtmlText(titleMatch ? titleMatch[1] : "")
+            var price = stripHtmlText(priceMatch ? priceMatch[1] : "")
+            var listHtml = listMatch ? listMatch[1] : ""
+
+            var items = []
+            var liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi
+            var liMatch
+            while ((liMatch = liRegex.exec(listHtml)) !== null) {
+                var itemText = stripHtmlText(liMatch[1])
+                if (itemText) {
+                    items.push(itemText)
+                }
+            }
+
+            if (items.length === 0) {
+                continue
+            }
+
+            sections.push({
+                sortOrder: sections.length + 1,
+                name: title || "Menu",
+                price: price,
+                components: items
+            })
+        }
+
+        return sections
+    }
+
+    function normalizeAntellTodayMenu(rawPayload) {
+        if (!rawPayload || rawPayload.provider !== "antell") {
+            return null
+        }
+
+        return {
+            dateIso: localDateIso(new Date()),
+            lunchTime: "",
+            menus: parseAntellSections(rawPayload.htmlText)
+        }
+    }
+
+    function parseAntellPayload(code, htmlText) {
+        var entry = restaurantEntryForCode(code)
+        var payloadText = String(htmlText || "")
+        var locationMatch = payloadText.match(/<div class="menu-location">([\s\S]*?)<\/div>/i)
+        var location = stripHtmlText(locationMatch ? locationMatch[1] : "")
+        var fallbackName = entry ? String(entry.fallbackName || "Antell") : "Antell"
+        var name = location
+            ? (location.toLowerCase().indexOf("antell") === 0 ? location : ("Antell " + location))
+            : fallbackName
+        var url = entry && entry.antellUrlBase ? String(entry.antellUrlBase) : ""
+        var rawPayload = {
+            provider: "antell",
+            htmlText: payloadText,
+            restaurantName: name,
+            restaurantUrl: url
+        }
+
+        return {
+            rawPayload: rawPayload,
+            todayMenu: normalizeAntellTodayMenu(rawPayload),
+            restaurantName: name,
+            restaurantUrl: url
+        }
+    }
+
     function normalizeMenuEntry(menuEntry) {
         var name = MenuFormatter.normalizeText(menuEntry && menuEntry.Name)
         var price = MenuFormatter.normalizeText(menuEntry && menuEntry.Price)
@@ -246,6 +365,10 @@ PlasmoidItem {
     }
 
     function cacheKey(code) {
+        var entry = restaurantEntryForCode(code)
+        if (entry && entry.provider === "antell") {
+            return String(code) + "|antell"
+        }
         return String(code) + "|" + configLanguage
     }
 
@@ -282,23 +405,41 @@ PlasmoidItem {
         })
     }
 
-    function applyPayloadForCode(code, jsonText, fromCache, cachedTimestamp) {
-        var parsed
-        try {
-            parsed = JSON.parse(jsonText)
-        } catch (e) {
-            setErrorStateForCode(code, "Invalid JSON payload")
-            return false
-        }
+    function applyPayloadForCode(code, payloadText, fromCache, cachedTimestamp) {
+        var entry = restaurantEntryForCode(code)
+        var provider = entry && entry.provider ? String(entry.provider) : "compass"
+        var parsed = null
+        var todayMenu = null
+        var restaurantName = ""
+        var restaurantUrl = ""
 
-        if (!parsed || !Array.isArray(parsed.MenusForDays)) {
-            setErrorStateForCode(code, "Missing MenusForDays in payload")
-            return false
-        }
+        if (provider === "antell") {
+            var antell = parseAntellPayload(code, payloadText)
+            parsed = antell.rawPayload
+            todayMenu = antell.todayMenu
+            restaurantName = antell.restaurantName
+            restaurantUrl = antell.restaurantUrl
+        } else {
+            try {
+                parsed = JSON.parse(payloadText)
+            } catch (e) {
+                setErrorStateForCode(code, "Invalid JSON payload")
+                return false
+            }
 
-        if (parsed.ErrorText) {
-            setErrorStateForCode(code, MenuFormatter.normalizeText(parsed.ErrorText))
-            return false
+            if (!parsed || !Array.isArray(parsed.MenusForDays)) {
+                setErrorStateForCode(code, "Missing MenusForDays in payload")
+                return false
+            }
+
+            if (parsed.ErrorText) {
+                setErrorStateForCode(code, MenuFormatter.normalizeText(parsed.ErrorText))
+                return false
+            }
+
+            todayMenu = normalizeTodayMenu(parsed)
+            restaurantName = MenuFormatter.normalizeText(parsed.RestaurantName) || "Compass Lunch"
+            restaurantUrl = MenuFormatter.normalizeText(parsed.RestaurantUrl)
         }
 
         var updatedMs = fromCache ? (Number(cachedTimestamp) || 0) : Date.now()
@@ -307,11 +448,11 @@ PlasmoidItem {
             status: fromCache ? "stale" : "ok",
             errorMessage: "",
             lastUpdatedEpochMs: updatedMs,
-            payloadText: jsonText,
+            payloadText: payloadText,
             rawPayload: parsed,
-            todayMenu: normalizeTodayMenu(parsed),
-            restaurantName: MenuFormatter.normalizeText(parsed.RestaurantName) || "Compass Lunch",
-            restaurantUrl: MenuFormatter.normalizeText(parsed.RestaurantUrl)
+            todayMenu: todayMenu,
+            restaurantName: restaurantName,
+            restaurantUrl: restaurantUrl
         })
 
         if (String(code) === activeRestaurantCode) {
@@ -319,7 +460,7 @@ PlasmoidItem {
         }
 
         if (!fromCache) {
-            saveCacheEntry(code, jsonText, updatedMs)
+            saveCacheEntry(code, payloadText, updatedMs)
         }
 
         return true
@@ -345,13 +486,28 @@ PlasmoidItem {
             if (!state.rawPayload) {
                 continue
             }
+            var refreshedMenu = state.rawPayload.provider === "antell"
+                ? normalizeAntellTodayMenu(state.rawPayload)
+                : normalizeTodayMenu(state.rawPayload)
             updateState(code, {
-                todayMenu: normalizeTodayMenu(state.rawPayload)
+                todayMenu: refreshedMenu
             })
         }
     }
 
     function buildRequestUrl(code) {
+        var entry = restaurantEntryForCode(code)
+        if (!entry) {
+            return ""
+        }
+
+        if (entry.provider === "antell") {
+            return String(entry.antellUrlBase)
+                + "?print_lunch_day="
+                + encodeURIComponent(weekdayToken(new Date()))
+                + "&print_lunch_list_day=1"
+        }
+
         return apiBaseUrl + "?costNumber=" + encodeURIComponent(String(code)) + "&language=" + encodeURIComponent(configLanguage)
     }
 
@@ -372,8 +528,14 @@ PlasmoidItem {
             })
         }
 
+        var requestUrl = buildRequestUrl(normalized)
+        if (!requestUrl) {
+            setErrorStateForCode(normalized, "Unsupported restaurant provider")
+            return
+        }
+
         var xhr = new XMLHttpRequest()
-        xhr.open("GET", buildRequestUrl(normalized))
+        xhr.open("GET", requestUrl)
         xhr.timeout = manual ? 15000 : 10000
 
         xhr.onreadystatechange = function() {
@@ -515,6 +677,15 @@ PlasmoidItem {
     onActiveRestaurantCodeChanged: syncSettingsLastUpdatedDisplay()
 
     onConfigLanguageChanged: {
+        resetAllStates()
+        activeRestaurantCode = configRestaurantCode
+        loadCacheStore()
+        loadCachedPayloadsForCurrentLanguage()
+        refreshAllRestaurants(false)
+        syncSettingsLastUpdatedDisplay()
+    }
+
+    onConfigEnableAntellRestaurantsChanged: {
         resetAllStates()
         activeRestaurantCode = configRestaurantCode
         loadCacheStore()

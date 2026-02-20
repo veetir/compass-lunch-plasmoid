@@ -10,6 +10,7 @@ Item {
     property int cfg_manualRefreshToken: 0
     property alias cfg_showPrices: showPricesCheck.checked
     property string cfg_iconName: "food"
+    property alias cfg_enableAntellRestaurants: antellRestaurantsCheck.checked
     property alias cfg_showAllergens: showAllergensCheck.checked
     property alias cfg_highlightGlutenFree: highlightGlutenFreeCheck.checked
     property alias cfg_highlightVeg: highlightVegCheck.checked
@@ -17,6 +18,19 @@ Item {
     property alias cfg_enableWheelCycle: wheelCycleCheck.checked
     property string cfg_lastUpdatedDisplay: ""
     property string cfg_language: "fi"
+    property var baseRestaurantOptions: [
+        { code: "0437", label: "Ita-Suomen yliopisto/Snellmania (0437)" },
+        { code: "0439", label: "Tietoteknia (0439)" },
+        { code: "0436", label: "Ita-Suomen yliopisto/Canthia (0436)" }
+    ]
+    property var antellRestaurantOptions: [
+        { code: "antell-highway", label: "Antell Highway" },
+        { code: "antell-round", label: "Antell Round" }
+    ]
+
+    function availableRestaurantOptions() {
+        return cfg_enableAntellRestaurants ? baseRestaurantOptions.concat(antellRestaurantOptions) : baseRestaurantOptions
+    }
 
     function restaurantIndexForCode(code) {
         var list = restaurantCombo.model
@@ -29,11 +43,15 @@ Item {
     }
 
     function syncRestaurantCombo() {
+        var model = restaurantCombo.model
+        if (!model || model.length === 0) {
+            return
+        }
         var idx = restaurantIndexForCode(cfg_restaurantCode)
         if (restaurantCombo.currentIndex !== idx) {
             restaurantCombo.currentIndex = idx
         }
-        cfg_restaurantCode = restaurantCombo.model[restaurantCombo.currentIndex].code
+        cfg_restaurantCode = model[restaurantCombo.currentIndex].code
     }
 
     function syncLanguageCombo() {
@@ -70,6 +88,7 @@ Item {
     onCfg_restaurantCodeChanged: syncRestaurantCombo()
     onCfg_languageChanged: syncLanguageCombo()
     onCfg_iconNameChanged: syncIconCombo()
+    onCfg_enableAntellRestaurantsChanged: syncRestaurantCombo()
 
     ColumnLayout {
         anchors.fill: parent
@@ -84,11 +103,7 @@ Item {
             id: restaurantCombo
             Layout.fillWidth: true
             textRole: "label"
-            model: [
-                { code: "0437", label: "Ita-Suomen yliopisto/Snellmania (0437)" },
-                { code: "0439", label: "Tietoteknia (0439)" },
-                { code: "0436", label: "Ita-Suomen yliopisto/Canthia (0436)" }
-            ]
+            model: page.availableRestaurantOptions()
             onCurrentIndexChanged: {
                 if (currentIndex >= 0) {
                     cfg_restaurantCode = model[currentIndex].code
@@ -123,6 +138,11 @@ Item {
         QQC2.CheckBox {
             id: showPricesCheck
             text: "Show prices"
+        }
+
+        QQC2.CheckBox {
+            id: antellRestaurantsCheck
+            text: "Enable Antell restaurants"
         }
 
         RowLayout {
