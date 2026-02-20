@@ -1,11 +1,12 @@
 # Compass Lunch Plasmoid
 
-System tray oriented KDE Plasma widget for Compass Group Kuopio lunch menus.
+System tray KDE Plasma widget for Compass Group Kuopio lunch menus.
 
 ## Features
 
 - Shows today's lunch in hover tooltip.
 - Supports Snellmania, Canthia, Tietoteknia
+    - Antell: Round, Highway (experimental)
 - Language switch (`fi` / `en`) and configurable favorite restaurant.
 - Mouse-wheel cycling on tray icon to switch restaurant instantly.
 - Middle-click icon to open restaurant page.
@@ -13,7 +14,10 @@ System tray oriented KDE Plasma widget for Compass Group Kuopio lunch menus.
 
 ## Screenshot
 
-![Compass Lunch screenshot](plasma5/docs/image.png)
+<p>
+  <img src="plasma6/docs/image.png" alt="Compass Lunch widget" width="49%" />
+  <img src="plasma6/docs/settings.png" alt="Compass Lunch settings" width="49%" />
+</p>
 
 ## Install / Update / Remove
 
