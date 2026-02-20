@@ -9,9 +9,31 @@ Item {
     property alias cfg_refreshMinutes: refreshSpin.value
     property int cfg_manualRefreshToken: 0
     property alias cfg_showPrices: showPricesCheck.checked
+    property alias cfg_showStudentPrice: showStudentPriceCheck.checked
+    property alias cfg_showStaffPrice: showStaffPriceCheck.checked
+    property alias cfg_showGuestPrice: showGuestPriceCheck.checked
+    property string cfg_iconName: "food"
+    property alias cfg_enableAntellRestaurants: antellRestaurantsCheck.checked
+    property alias cfg_showAllergens: showAllergensCheck.checked
+    property alias cfg_highlightGlutenFree: highlightGlutenFreeCheck.checked
+    property alias cfg_highlightVeg: highlightVegCheck.checked
+    property alias cfg_highlightLactoseFree: highlightLactoseFreeCheck.checked
     property alias cfg_enableWheelCycle: wheelCycleCheck.checked
     property string cfg_lastUpdatedDisplay: ""
     property string cfg_language: "fi"
+    property var baseRestaurantOptions: [
+        { code: "0437", label: "Ita-Suomen yliopisto/Snellmania (0437)" },
+        { code: "0439", label: "Tietoteknia (0439)" },
+        { code: "0436", label: "Ita-Suomen yliopisto/Canthia (0436)" }
+    ]
+    property var antellRestaurantOptions: [
+        { code: "antell-highway", label: "Antell Highway" },
+        { code: "antell-round", label: "Antell Round" }
+    ]
+
+    function availableRestaurantOptions() {
+        return cfg_enableAntellRestaurants ? baseRestaurantOptions.concat(antellRestaurantOptions) : baseRestaurantOptions
+    }
 
     function restaurantIndexForCode(code) {
         var list = restaurantCombo.model
@@ -24,11 +46,15 @@ Item {
     }
 
     function syncRestaurantCombo() {
+        var model = restaurantCombo.model
+        if (!model || model.length === 0) {
+            return
+        }
         var idx = restaurantIndexForCode(cfg_restaurantCode)
         if (restaurantCombo.currentIndex !== idx) {
             restaurantCombo.currentIndex = idx
         }
-        cfg_restaurantCode = restaurantCombo.model[restaurantCombo.currentIndex].code
+        cfg_restaurantCode = model[restaurantCombo.currentIndex].code
     }
 
     function syncLanguageCombo() {
@@ -42,8 +68,30 @@ Item {
         }
     }
 
+    function iconIndexForName(name) {
+        var list = iconCombo.model
+        for (var i = 0; i < list.length; i++) {
+            if (list[i].name === name) {
+                return i
+            }
+        }
+        return 0
+    }
+
+    function syncIconCombo() {
+        var idx = iconIndexForName(cfg_iconName)
+        if (iconCombo.currentIndex !== idx) {
+            iconCombo.currentIndex = idx
+        }
+        if (iconCombo.currentIndex >= 0) {
+            cfg_iconName = iconCombo.model[iconCombo.currentIndex].name
+        }
+    }
+
     onCfg_restaurantCodeChanged: syncRestaurantCombo()
     onCfg_languageChanged: syncLanguageCombo()
+    onCfg_iconNameChanged: syncIconCombo()
+    onCfg_enableAntellRestaurantsChanged: syncRestaurantCombo()
 
     ColumnLayout {
         anchors.fill: parent
@@ -58,11 +106,7 @@ Item {
             id: restaurantCombo
             Layout.fillWidth: true
             textRole: "label"
-            model: [
-                { code: "0437", label: "Ita-Suomen yliopisto/Snellmania (0437)" },
-                { code: "0439", label: "Tietoteknia (0439)" },
-                { code: "0436", label: "Ita-Suomen yliopisto/Canthia (0436)" }
-            ]
+            model: page.availableRestaurantOptions()
             onCurrentIndexChanged: {
                 if (currentIndex >= 0) {
                     cfg_restaurantCode = model[currentIndex].code
@@ -97,6 +141,95 @@ Item {
         QQC2.CheckBox {
             id: showPricesCheck
             text: "Show prices"
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 10
+            enabled: showPricesCheck.checked
+            opacity: enabled ? 1.0 : 0.55
+
+            QQC2.Label {
+                text: "Price groups"
+            }
+
+            QQC2.CheckBox {
+                id: showStudentPriceCheck
+                text: "Student"
+            }
+
+            QQC2.CheckBox {
+                id: showStaffPriceCheck
+                text: "Staff"
+            }
+
+            QQC2.CheckBox {
+                id: showGuestPriceCheck
+                text: "Guest"
+            }
+        }
+
+        QQC2.CheckBox {
+            id: antellRestaurantsCheck
+            text: "Enable Antell restaurants"
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 10
+
+            QQC2.Label {
+                text: "Tray icon"
+            }
+
+            QQC2.ComboBox {
+                id: iconCombo
+                Layout.fillWidth: true
+                textRole: "label"
+                model: [
+                    { name: "food", label: "Food (default)" },
+                    { name: "compass", label: "Compass" },
+                    { name: "map-globe", label: "Globe" },
+                    { name: "map-flat", label: "Map" }
+                ]
+                onCurrentIndexChanged: {
+                    if (currentIndex >= 0) {
+                        cfg_iconName = model[currentIndex].name
+                    }
+                }
+                Component.onCompleted: page.syncIconCombo()
+            }
+        }
+
+        QQC2.CheckBox {
+            id: showAllergensCheck
+            text: "Show allergens"
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 10
+            enabled: showAllergensCheck.checked
+            opacity: enabled ? 1.0 : 0.55
+
+            QQC2.Label {
+                text: "Highlight"
+            }
+
+            QQC2.CheckBox {
+                id: highlightGlutenFreeCheck
+                text: "G"
+            }
+
+            QQC2.CheckBox {
+                id: highlightVegCheck
+                text: "Veg"
+            }
+
+            QQC2.CheckBox {
+                id: highlightLactoseFreeCheck
+                text: "L"
+            }
         }
 
         QQC2.CheckBox {
