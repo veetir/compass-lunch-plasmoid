@@ -9,6 +9,9 @@ Item {
     property alias cfg_refreshMinutes: refreshSpin.value
     property int cfg_manualRefreshToken: 0
     property alias cfg_showPrices: showPricesCheck.checked
+    property alias cfg_showStudentPrice: showStudentPriceCheck.checked
+    property alias cfg_showStaffPrice: showStaffPriceCheck.checked
+    property alias cfg_showGuestPrice: showGuestPriceCheck.checked
     property string cfg_iconName: "food"
     property alias cfg_enableAntellRestaurants: antellRestaurantsCheck.checked
     property alias cfg_showAllergens: showAllergensCheck.checked
@@ -138,6 +141,32 @@ Item {
         QQC2.CheckBox {
             id: showPricesCheck
             text: "Show prices"
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 10
+            enabled: showPricesCheck.checked
+            opacity: enabled ? 1.0 : 0.55
+
+            QQC2.Label {
+                text: "Price groups"
+            }
+
+            QQC2.CheckBox {
+                id: showStudentPriceCheck
+                text: "Student"
+            }
+
+            QQC2.CheckBox {
+                id: showStaffPriceCheck
+                text: "Staff"
+            }
+
+            QQC2.CheckBox {
+                id: showGuestPriceCheck
+                text: "Guest"
+            }
         }
 
         QQC2.CheckBox {

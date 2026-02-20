@@ -80,7 +80,138 @@ function textFor(language, key) {
     return dict[key] || key;
 }
 
-function menuHeading(menu, showPrices) {
+function parseCompassPriceSegments(priceText) {
+    var raw = normalizeText(priceText);
+    if (!raw) {
+        return [];
+    }
+
+    var defs = [
+        { key: "student", pattern: "(?:Opiskelija|Student|Opisk\\.?|Op\\.?)" },
+        { key: "staff", pattern: "(?:Henkilökunta|Staff|Henk\\.?|Hk\\.?)" },
+        { key: "guest", pattern: "(?:Vierailija|Guest|Vieras|Vier\\.?)" }
+    ];
+    var segments = [];
+    var matchedRanges = [];
+
+    for (var i = 0; i < defs.length; i++) {
+        var regex = new RegExp("(" + defs[i].pattern + ")\\s*[:\\-]?\\s*([0-9]+(?:[\\.,][0-9]+)?\\s*€?)", "gi");
+        var match;
+        while ((match = regex.exec(raw)) !== null) {
+            var label = normalizeText(match[1]);
+            var value = normalizeText(match[2]);
+            if (!value) {
+                continue;
+            }
+            segments.push({
+                key: defs[i].key,
+                label: label,
+                value: value,
+                start: match.index
+            });
+            matchedRanges.push({
+                start: match.index,
+                end: regex.lastIndex
+            });
+        }
+    }
+
+    if (matchedRanges.length > 0) {
+        matchedRanges.sort(function(a, b) {
+            return a.start - b.start;
+        });
+
+        var cursor = 0;
+        var leftovers = "";
+        for (var j = 0; j < matchedRanges.length; j++) {
+            var range = matchedRanges[j];
+            if (range.start > cursor) {
+                leftovers += raw.slice(cursor, range.start) + " ";
+            }
+            cursor = Math.max(cursor, range.end);
+        }
+        if (cursor < raw.length) {
+            leftovers += raw.slice(cursor);
+        }
+
+        var maskedChars = raw.split("");
+        for (var k = 0; k < matchedRanges.length; k++) {
+            var range = matchedRanges[k];
+            for (var p = range.start; p < range.end && p < maskedChars.length; p++) {
+                maskedChars[p] = " ";
+            }
+        }
+        var masked = maskedChars.join("");
+        var baseRegex = /[0-9]+(?:[.,][0-9]+)?\s*€?/g;
+        var baseMatch;
+        while ((baseMatch = baseRegex.exec(masked)) !== null) {
+            var baseValue = normalizeText(baseMatch[0]);
+            if (baseValue) {
+                segments.push({
+                    key: "base",
+                    label: "",
+                    value: baseValue,
+                    start: baseMatch.index
+                });
+            }
+        }
+    } else {
+        var standaloneRegex = /[0-9]+(?:[.,][0-9]+)?\s*€?/g;
+        var standaloneMatch;
+        while ((standaloneMatch = standaloneRegex.exec(raw)) !== null) {
+            var standalone = normalizeText(standaloneMatch[0]);
+            if (standalone) {
+                segments.push({
+                    key: "base",
+                    label: "",
+                    value: standalone,
+                    start: standaloneMatch.index
+                });
+            }
+        }
+    }
+
+    segments.sort(function(a, b) {
+        return (Number(a.start) || 0) - (Number(b.start) || 0);
+    });
+
+    return segments;
+}
+
+function shouldShowPriceSegment(segmentKey, showStudentPrice, showStaffPrice, showGuestPrice) {
+    if (segmentKey === "student") {
+        return showStudentPrice !== false;
+    }
+    if (segmentKey === "staff") {
+        return showStaffPrice !== false;
+    }
+    if (segmentKey === "guest") {
+        return showGuestPrice !== false;
+    }
+    if (segmentKey === "base") {
+        return showStaffPrice !== false || showGuestPrice !== false;
+    }
+    return true;
+}
+
+function formatCompassPrice(priceText, showStudentPrice, showStaffPrice, showGuestPrice) {
+    var segments = parseCompassPriceSegments(priceText);
+    if (segments.length === 0) {
+        return normalizeText(priceText);
+    }
+
+    var selected = [];
+    for (var i = 0; i < segments.length; i++) {
+        var segment = segments[i];
+        if (shouldShowPriceSegment(segment.key, showStudentPrice, showStaffPrice, showGuestPrice)) {
+            selected.push(segment.label ? (segment.label + " " + segment.value) : segment.value);
+        }
+    }
+
+    return selected.join(" / ");
+}
+
+function menuHeading(menu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider) {
     var heading = normalizeText(menu.name);
     if (!heading) {
         heading = "Menu";
@@ -88,6 +219,12 @@ function menuHeading(menu, showPrices) {
 
     var price = normalizeText(menu.price);
     if (showPrices && price) {
+        if (isCompassProvider) {
+            price = formatCompassPrice(price, showStudentPrice, showStaffPrice, showGuestPrice);
+            if (!price) {
+                return heading;
+            }
+        }
         return heading + " - " + price;
     }
 
@@ -164,7 +301,7 @@ function highlightSuffixRich(suffix, highlightGlutenFree, highlightVeg, highligh
     return "(" + styledTags.join(", ") + ")";
 }
 
-function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showAllergens, highlightGlutenFree, highlightVeg, highlightLactoseFree) {
+function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider, showAllergens, highlightGlutenFree, highlightVeg, highlightLactoseFree) {
     var lines = [];
 
     if (!todayMenu && fetchState === "loading") {
@@ -179,7 +316,7 @@ function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpoc
     if (todayMenu && todayMenu.menus && todayMenu.menus.length > 0) {
         for (var i = 0; i < todayMenu.menus.length; i++) {
             var menu = todayMenu.menus[i];
-            lines.push(menuHeading(menu, showPrices));
+            lines.push(menuHeading(menu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider));
             var components = menu.components || [];
             for (var j = 0; j < components.length; j++) {
                 var component = plainComponentLine(components[j], showAllergens);
@@ -205,7 +342,7 @@ function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpoc
     return lines.join("\n");
 }
 
-function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showAllergens, highlightGlutenFree, highlightVeg, highlightLactoseFree) {
+function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider, showAllergens, highlightGlutenFree, highlightVeg, highlightLactoseFree) {
     var lines = [];
 
     if (!todayMenu && fetchState === "loading") {
@@ -220,7 +357,7 @@ function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdated
     if (todayMenu && todayMenu.menus && todayMenu.menus.length > 0) {
         for (var i = 0; i < todayMenu.menus.length; i++) {
             var menu = todayMenu.menus[i];
-            lines.push("<b>" + escapeHtml(menuHeading(menu, showPrices)) + "</b>");
+            lines.push("<b>" + escapeHtml(menuHeading(menu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider)) + "</b>");
 
             var components = menu.components || [];
             for (var j = 0; j < components.length; j++) {

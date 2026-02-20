@@ -54,6 +54,9 @@ PlasmoidItem {
     }
     property int configManualRefreshToken: Number(Plasmoid.configuration.manualRefreshToken || 0)
     property bool configShowPrices: !!Plasmoid.configuration.showPrices
+    property bool configShowStudentPrice: Plasmoid.configuration.showStudentPrice !== false
+    property bool configShowStaffPrice: Plasmoid.configuration.showStaffPrice !== false
+    property bool configShowGuestPrice: Plasmoid.configuration.showGuestPrice !== false
     property bool configShowAllergens: Plasmoid.configuration.showAllergens !== false
     property bool configHighlightGlutenFree: !!Plasmoid.configuration.highlightGlutenFree
     property bool configHighlightVeg: !!Plasmoid.configuration.highlightVeg
@@ -622,6 +625,8 @@ PlasmoidItem {
 
     function tooltipSubText() {
         var state = stateFor(activeRestaurantCode)
+        var entry = restaurantEntryForCode(activeRestaurantCode)
+        var isCompassProvider = !!entry && entry.provider === "compass"
         return MenuFormatter.buildTooltipSubText(
             configLanguage,
             state.status,
@@ -629,6 +634,10 @@ PlasmoidItem {
             state.lastUpdatedEpochMs,
             state.todayMenu,
             configShowPrices,
+            configShowStudentPrice,
+            configShowStaffPrice,
+            configShowGuestPrice,
+            isCompassProvider,
             configShowAllergens,
             configHighlightGlutenFree,
             configHighlightVeg,
@@ -638,6 +647,8 @@ PlasmoidItem {
 
     function tooltipSubTextRich() {
         var state = stateFor(activeRestaurantCode)
+        var entry = restaurantEntryForCode(activeRestaurantCode)
+        var isCompassProvider = !!entry && entry.provider === "compass"
         return MenuFormatter.buildTooltipSubTextRich(
             configLanguage,
             state.status,
@@ -645,6 +656,10 @@ PlasmoidItem {
             state.lastUpdatedEpochMs,
             state.todayMenu,
             configShowPrices,
+            configShowStudentPrice,
+            configShowStaffPrice,
+            configShowGuestPrice,
+            isCompassProvider,
             configShowAllergens,
             configHighlightGlutenFree,
             configHighlightVeg,
