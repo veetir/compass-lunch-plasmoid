@@ -9,6 +9,7 @@ Item {
     property alias cfg_refreshMinutes: refreshSpin.value
     property int cfg_manualRefreshToken: 0
     property alias cfg_showPrices: showPricesCheck.checked
+    property alias cfg_showAllergens: showAllergensCheck.checked
     property alias cfg_enableWheelCycle: wheelCycleCheck.checked
     property string cfg_lastUpdatedDisplay: ""
     property string cfg_language: "fi"
@@ -97,6 +98,11 @@ Item {
         QQC2.CheckBox {
             id: showPricesCheck
             text: "Show prices"
+        }
+
+        QQC2.CheckBox {
+            id: showAllergensCheck
+            text: "Show allergens"
         }
 
         QQC2.CheckBox {

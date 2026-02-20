@@ -96,7 +96,7 @@ function menuHeading(menu, showPrices) {
 
 function splitComponentSuffix(component) {
     var text = normalizeText(component);
-    var match = text.match(/^(.*\S)\s+(\([^()]*\))$/);
+    var match = text.match(/^(.*\S)\s+(\((?:\*|[A-Za-z]{1,8})(?:\s*,\s*(?:\*|[A-Za-z]{1,8}))*\))$/);
     if (!match) {
         return {
             main: text,
@@ -109,7 +109,19 @@ function splitComponentSuffix(component) {
     };
 }
 
-function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices) {
+function shouldShowAllergens(showAllergens) {
+    return showAllergens !== false;
+}
+
+function plainComponentLine(component, showAllergens) {
+    var parts = splitComponentSuffix(component);
+    if (shouldShowAllergens(showAllergens) || !parts.suffix) {
+        return parts.main + (parts.suffix ? " " + parts.suffix : "");
+    }
+    return parts.main;
+}
+
+function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showAllergens) {
     var lines = [];
 
     if (!todayMenu && fetchState === "loading") {
@@ -127,7 +139,7 @@ function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpoc
             lines.push(menuHeading(menu, showPrices));
             var components = menu.components || [];
             for (var j = 0; j < components.length; j++) {
-                var component = normalizeText(components[j]);
+                var component = plainComponentLine(components[j], showAllergens);
                 if (component) {
                     lines.push("  - " + component);
                 }
@@ -150,7 +162,7 @@ function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpoc
     return lines.join("\n");
 }
 
-function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices) {
+function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showAllergens) {
     var lines = [];
 
     if (!todayMenu && fetchState === "loading") {
@@ -173,8 +185,8 @@ function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdated
                 if (component) {
                     var parts = splitComponentSuffix(component);
                     var componentLine = "&nbsp;&nbsp;&nbsp;▸ " + escapeHtml(parts.main);
-                    if (parts.suffix) {
-                        componentLine += " <small>" + escapeHtml(parts.suffix) + "</small>";
+                    if (parts.suffix && shouldShowAllergens(showAllergens)) {
+                        componentLine += " <small><font color=\"#808080\">" + escapeHtml(parts.suffix) + "</font></small>";
                     }
                     lines.push(componentLine);
                 }

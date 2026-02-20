@@ -47,6 +47,7 @@ PlasmoidItem {
     }
     property int configManualRefreshToken: Number(Plasmoid.configuration.manualRefreshToken || 0)
     property bool configShowPrices: !!Plasmoid.configuration.showPrices
+    property bool configShowAllergens: Plasmoid.configuration.showAllergens !== false
 
     Settings {
         id: cache
@@ -457,7 +458,8 @@ PlasmoidItem {
             state.errorMessage,
             state.lastUpdatedEpochMs,
             state.todayMenu,
-            configShowPrices
+            configShowPrices,
+            configShowAllergens
         )
     }
 
@@ -469,7 +471,8 @@ PlasmoidItem {
             state.errorMessage,
             state.lastUpdatedEpochMs,
             state.todayMenu,
-            configShowPrices
+            configShowPrices,
+            configShowAllergens
         )
     }
 
