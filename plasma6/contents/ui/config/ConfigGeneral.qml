@@ -9,6 +9,7 @@ Item {
     property alias cfg_refreshMinutes: refreshSpin.value
     property int cfg_manualRefreshToken: 0
     property alias cfg_showPrices: showPricesCheck.checked
+    property string cfg_iconName: "food"
     property alias cfg_showAllergens: showAllergensCheck.checked
     property alias cfg_highlightGlutenFree: highlightGlutenFreeCheck.checked
     property alias cfg_highlightVeg: highlightVegCheck.checked
@@ -46,8 +47,29 @@ Item {
         }
     }
 
+    function iconIndexForName(name) {
+        var list = iconCombo.model
+        for (var i = 0; i < list.length; i++) {
+            if (list[i].name === name) {
+                return i
+            }
+        }
+        return 0
+    }
+
+    function syncIconCombo() {
+        var idx = iconIndexForName(cfg_iconName)
+        if (iconCombo.currentIndex !== idx) {
+            iconCombo.currentIndex = idx
+        }
+        if (iconCombo.currentIndex >= 0) {
+            cfg_iconName = iconCombo.model[iconCombo.currentIndex].name
+        }
+    }
+
     onCfg_restaurantCodeChanged: syncRestaurantCombo()
     onCfg_languageChanged: syncLanguageCombo()
+    onCfg_iconNameChanged: syncIconCombo()
 
     ColumnLayout {
         anchors.fill: parent
@@ -101,6 +123,33 @@ Item {
         QQC2.CheckBox {
             id: showPricesCheck
             text: "Show prices"
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 10
+
+            QQC2.Label {
+                text: "Tray icon"
+            }
+
+            QQC2.ComboBox {
+                id: iconCombo
+                Layout.fillWidth: true
+                textRole: "label"
+                model: [
+                    { name: "food", label: "Food (default)" },
+                    { name: "compass", label: "Compass" },
+                    { name: "map-globe", label: "Globe" },
+                    { name: "map-flat", label: "Map" }
+                ]
+                onCurrentIndexChanged: {
+                    if (currentIndex >= 0) {
+                        cfg_iconName = model[currentIndex].name
+                    }
+                }
+                Component.onCompleted: page.syncIconCombo()
+            }
         }
 
         QQC2.CheckBox {

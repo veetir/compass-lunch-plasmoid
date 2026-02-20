@@ -22,6 +22,7 @@ PlasmoidItem {
     property var cacheStore: ({})
     property int modelVersion: 0
     property bool initialized: false
+    property var supportedIconNames: ["food", "compass", "map-globe", "map-flat"]
 
     property string activeRestaurantCode: "0437"
 
@@ -51,6 +52,10 @@ PlasmoidItem {
     property bool configHighlightGlutenFree: !!Plasmoid.configuration.highlightGlutenFree
     property bool configHighlightVeg: !!Plasmoid.configuration.highlightVeg
     property bool configHighlightLactoseFree: !!Plasmoid.configuration.highlightLactoseFree
+    property string configIconName: {
+        var raw = String(Plasmoid.configuration.iconName || "food").trim()
+        return supportedIconNames.indexOf(raw) >= 0 ? raw : "food"
+    }
 
     Settings {
         id: cache
@@ -487,7 +492,7 @@ PlasmoidItem {
 
     function activeIconName() {
         var state = stateFor(activeRestaurantCode)
-        return (state.status === "error" || state.status === "stale") ? "dialog-warning" : "food"
+        return (state.status === "error" || state.status === "stale") ? "dialog-warning" : configIconName
     }
 
     function bootstrapData() {
