@@ -10,6 +10,9 @@ Item {
     property int cfg_manualRefreshToken: 0
     property alias cfg_showPrices: showPricesCheck.checked
     property alias cfg_showAllergens: showAllergensCheck.checked
+    property alias cfg_highlightGlutenFree: highlightGlutenFreeCheck.checked
+    property alias cfg_highlightVeg: highlightVegCheck.checked
+    property alias cfg_highlightLactoseFree: highlightLactoseFreeCheck.checked
     property alias cfg_enableWheelCycle: wheelCycleCheck.checked
     property string cfg_lastUpdatedDisplay: ""
     property string cfg_language: "fi"
@@ -103,6 +106,32 @@ Item {
         QQC2.CheckBox {
             id: showAllergensCheck
             text: "Show allergens"
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 10
+            enabled: showAllergensCheck.checked
+            opacity: enabled ? 1.0 : 0.55
+
+            QQC2.Label {
+                text: "Highlight"
+            }
+
+            QQC2.CheckBox {
+                id: highlightGlutenFreeCheck
+                text: "G"
+            }
+
+            QQC2.CheckBox {
+                id: highlightVegCheck
+                text: "Veg"
+            }
+
+            QQC2.CheckBox {
+                id: highlightLactoseFreeCheck
+                text: "L"
+            }
         }
 
         QQC2.CheckBox {

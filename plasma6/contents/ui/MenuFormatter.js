@@ -113,6 +113,23 @@ function shouldShowAllergens(showAllergens) {
     return showAllergens !== false;
 }
 
+function shouldHighlightTag(tag, highlightGlutenFree, highlightVeg, highlightLactoseFree) {
+    var normalized = normalizeText(tag).toUpperCase();
+    if (!normalized) {
+        return false;
+    }
+    if (highlightGlutenFree && normalized === "G") {
+        return true;
+    }
+    if (highlightVeg && normalized === "VEG") {
+        return true;
+    }
+    if (highlightLactoseFree && normalized === "L") {
+        return true;
+    }
+    return false;
+}
+
 function plainComponentLine(component, showAllergens) {
     var parts = splitComponentSuffix(component);
     if (shouldShowAllergens(showAllergens) || !parts.suffix) {
@@ -121,7 +138,33 @@ function plainComponentLine(component, showAllergens) {
     return parts.main;
 }
 
-function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showAllergens) {
+function highlightSuffixRich(suffix, highlightGlutenFree, highlightVeg, highlightLactoseFree) {
+    var clean = normalizeText(suffix);
+    if (!clean || clean.charAt(0) !== "(" || clean.charAt(clean.length - 1) !== ")") {
+        return escapeHtml(clean);
+    }
+
+    var inner = clean.slice(1, -1);
+    var tags = inner ? inner.split(/\s*,\s*/) : [];
+    var styledTags = [];
+
+    for (var i = 0; i < tags.length; i++) {
+        var tag = normalizeText(tags[i]);
+        if (!tag) {
+            continue;
+        }
+        var escapedTag = escapeHtml(tag);
+        if (shouldHighlightTag(tag, highlightGlutenFree, highlightVeg, highlightLactoseFree)) {
+            styledTags.push("<b>" + escapedTag + "</b>");
+        } else {
+            styledTags.push(escapedTag);
+        }
+    }
+
+    return "(" + styledTags.join(", ") + ")";
+}
+
+function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showAllergens, highlightGlutenFree, highlightVeg, highlightLactoseFree) {
     var lines = [];
 
     if (!todayMenu && fetchState === "loading") {
@@ -162,7 +205,7 @@ function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpoc
     return lines.join("\n");
 }
 
-function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showAllergens) {
+function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showAllergens, highlightGlutenFree, highlightVeg, highlightLactoseFree) {
     var lines = [];
 
     if (!todayMenu && fetchState === "loading") {
@@ -186,7 +229,7 @@ function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdated
                     var parts = splitComponentSuffix(component);
                     var componentLine = "&nbsp;&nbsp;&nbsp;▸ " + escapeHtml(parts.main);
                     if (parts.suffix && shouldShowAllergens(showAllergens)) {
-                        componentLine += " <small><font color=\"#808080\">" + escapeHtml(parts.suffix) + "</font></small>";
+                        componentLine += " <small><font color=\"#808080\">" + highlightSuffixRich(parts.suffix, highlightGlutenFree, highlightVeg, highlightLactoseFree) + "</font></small>";
                     }
                     lines.push(componentLine);
                 }

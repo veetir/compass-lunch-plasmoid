@@ -48,6 +48,9 @@ PlasmoidItem {
     property int configManualRefreshToken: Number(Plasmoid.configuration.manualRefreshToken || 0)
     property bool configShowPrices: !!Plasmoid.configuration.showPrices
     property bool configShowAllergens: Plasmoid.configuration.showAllergens !== false
+    property bool configHighlightGlutenFree: !!Plasmoid.configuration.highlightGlutenFree
+    property bool configHighlightVeg: !!Plasmoid.configuration.highlightVeg
+    property bool configHighlightLactoseFree: !!Plasmoid.configuration.highlightLactoseFree
 
     Settings {
         id: cache
@@ -459,7 +462,10 @@ PlasmoidItem {
             state.lastUpdatedEpochMs,
             state.todayMenu,
             configShowPrices,
-            configShowAllergens
+            configShowAllergens,
+            configHighlightGlutenFree,
+            configHighlightVeg,
+            configHighlightLactoseFree
         )
     }
 
@@ -472,7 +478,10 @@ PlasmoidItem {
             state.lastUpdatedEpochMs,
             state.todayMenu,
             configShowPrices,
-            configShowAllergens
+            configShowAllergens,
+            configHighlightGlutenFree,
+            configHighlightVeg,
+            configHighlightLactoseFree
         )
     }
 

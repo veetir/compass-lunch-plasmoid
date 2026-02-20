@@ -25,6 +25,15 @@
     <entry name="showAllergens" type="Bool">
       <default>true</default>
     </entry>
+    <entry name="highlightGlutenFree" type="Bool">
+      <default>false</default>
+    </entry>
+    <entry name="highlightVeg" type="Bool">
+      <default>false</default>
+    </entry>
+    <entry name="highlightLactoseFree" type="Bool">
+      <default>false</default>
+    </entry>
     <entry name="lastUpdatedDisplay" type="String">
       <default></default>
     </entry>
