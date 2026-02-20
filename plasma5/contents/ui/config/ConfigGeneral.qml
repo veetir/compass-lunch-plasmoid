@@ -9,6 +9,7 @@ Item {
     property alias cfg_refreshMinutes: refreshSpin.value
     property int cfg_manualRefreshToken: 0
     property alias cfg_showPrices: showPricesCheck.checked
+    property alias cfg_hideExpensiveStudentMeals: hideExpensiveStudentMealsCheck.checked
     property alias cfg_showStudentPrice: showStudentPriceCheck.checked
     property alias cfg_showStaffPrice: showStaffPriceCheck.checked
     property alias cfg_showGuestPrice: showGuestPriceCheck.checked
@@ -141,6 +142,11 @@ Item {
         QQC2.CheckBox {
             id: showPricesCheck
             text: "Show prices"
+        }
+
+        QQC2.CheckBox {
+            id: hideExpensiveStudentMealsCheck
+            text: "Hide Compass meals with student price over 4 €"
         }
 
         RowLayout {

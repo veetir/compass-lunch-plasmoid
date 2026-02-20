@@ -53,6 +53,7 @@ Item {
     }
     property int configManualRefreshToken: Number(plasmoid.configuration.manualRefreshToken || 0)
     property bool configShowPrices: !!plasmoid.configuration.showPrices
+    property bool configHideExpensiveStudentMeals: !!plasmoid.configuration.hideExpensiveStudentMeals
     property bool configShowStudentPrice: plasmoid.configuration.showStudentPrice !== false
     property bool configShowStaffPrice: plasmoid.configuration.showStaffPrice !== false
     property bool configShowGuestPrice: plasmoid.configuration.showGuestPrice !== false
@@ -637,6 +638,7 @@ Item {
             configShowStaffPrice,
             configShowGuestPrice,
             isCompassProvider,
+            configHideExpensiveStudentMeals,
             configShowAllergens,
             configHighlightGlutenFree,
             configHighlightVeg,
@@ -659,6 +661,7 @@ Item {
             configShowStaffPrice,
             configShowGuestPrice,
             isCompassProvider,
+            configHideExpensiveStudentMeals,
             configShowAllergens,
             configHighlightGlutenFree,
             configHighlightVeg,
