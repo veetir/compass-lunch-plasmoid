@@ -1,8 +1,10 @@
 use crate::app::{AppState, FetchStatus};
 use crate::format::{
-    date_and_time_line, menu_heading, normalize_text, split_component_suffix, text_for,
+    date_and_time_line, menu_heading, normalize_text, split_component_suffix, student_price_eur,
+    text_for, PriceGroups,
 };
 use crate::model::TodayMenu;
+use crate::restaurant::Provider;
 use crate::util::to_wstring;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
@@ -25,7 +27,7 @@ const LINE_GAP: i32 = 2;
 enum Line {
     Heading(String),
     Text(String),
-    TextWithSuffix { main: String, suffix: String },
+    TextWithSuffixSegments { main: String, segments: Vec<(String, bool)> },
     Spacer,
 }
 
@@ -132,7 +134,7 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
         }
         SetBkMode(hdc, TRANSPARENT);
 
-        let (normal_font, bold_font, small_font) = create_fonts(hdc);
+        let (normal_font, bold_font, small_font, small_bold_font) = create_fonts(hdc);
         let _old_font = SelectObject(hdc, normal_font);
 
         let lines = build_lines(state);
@@ -154,15 +156,21 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                     draw_text_line(hdc, &text, PADDING_X, y);
                     y += line_height;
                 }
-                Line::TextWithSuffix { main, suffix } => {
+                Line::TextWithSuffixSegments { main, segments } => {
                     SelectObject(hdc, normal_font);
                     SetTextColor(hdc, text_color);
                     let main_width = text_width(hdc, &main);
                     draw_text_line(hdc, &main, PADDING_X, y);
-                    if !suffix.is_empty() {
-                        SelectObject(hdc, small_font);
-                        SetTextColor(hdc, suffix_color);
-                        draw_text_line(hdc, &suffix, PADDING_X + main_width + 4, y + 1);
+                    if !segments.is_empty() {
+                        draw_text_segments(
+                            hdc,
+                            &segments,
+                            PADDING_X + main_width + 4,
+                            y + 1,
+                            small_font,
+                            small_bold_font,
+                            suffix_color,
+                        );
                     }
                     y += line_height;
                 }
@@ -176,7 +184,29 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
         DeleteObject(normal_font);
         DeleteObject(bold_font);
         DeleteObject(small_font);
+        DeleteObject(small_bold_font);
         EndPaint(hwnd, &ps);
+    }
+}
+
+fn draw_text_segments(
+    hdc: HDC,
+    segments: &[(String, bool)],
+    x: i32,
+    y: i32,
+    normal_font: HFONT,
+    bold_font: HFONT,
+    color: COLORREF,
+) {
+    let mut cursor = x;
+    for (text, bold) in segments {
+        let font = if *bold { bold_font } else { normal_font };
+        unsafe {
+            SelectObject(hdc, font);
+            SetTextColor(hdc, color);
+        }
+        draw_text_line(hdc, text, cursor, y);
+        cursor += text_width(hdc, text);
     }
 }
 
@@ -215,7 +245,7 @@ fn text_width(hdc: HDC, text: &str) -> i32 {
 fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
     unsafe {
         let hdc = windows::Win32::Graphics::Gdi::GetDC(hwnd);
-        let (normal_font, bold_font, small_font) = create_fonts(hdc);
+        let (normal_font, bold_font, small_font, small_bold_font) = create_fonts(hdc);
         let lines = build_lines(state);
         let metrics = text_metrics(hdc, normal_font);
         let line_height = metrics.tmHeight as i32 + LINE_GAP;
@@ -231,11 +261,18 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
                     SelectObject(hdc, normal_font);
                     text_width(hdc, text)
                 }
-                Line::TextWithSuffix { main, suffix } => {
+                Line::TextWithSuffixSegments { main, segments } => {
                     SelectObject(hdc, normal_font);
                     let main_width = text_width(hdc, main);
-                    SelectObject(hdc, small_font);
-                    let suffix_width = if suffix.is_empty() { 0 } else { text_width(hdc, suffix) + 4 };
+                    let mut suffix_width = 0;
+                    for (segment, bold) in segments {
+                        let font = if *bold { small_bold_font } else { small_font };
+                        SelectObject(hdc, font);
+                        suffix_width += text_width(hdc, segment);
+                    }
+                    if suffix_width > 0 {
+                        suffix_width += 4;
+                    }
                     main_width + suffix_width
                 }
                 Line::Spacer => 0,
@@ -249,13 +286,14 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
         DeleteObject(normal_font);
         DeleteObject(bold_font);
         DeleteObject(small_font);
+        DeleteObject(small_bold_font);
         windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
 
         (width + PADDING_X * 2, height)
     }
 }
 
-fn create_fonts(hdc: HDC) -> (HFONT, HFONT, HFONT) {
+fn create_fonts(hdc: HDC) -> (HFONT, HFONT, HFONT, HFONT) {
     unsafe {
         let dpi = GetDeviceCaps(hdc, LOGPIXELSY);
         let height_normal = -MulDiv(12, dpi, 72);
@@ -310,14 +348,37 @@ fn create_fonts(hdc: HDC) -> (HFONT, HFONT, HFONT) {
             0,
             PCWSTR(face.as_ptr()),
         );
-        (normal, bold, small)
+        let small_bold = CreateFontW(
+            height_small,
+            0,
+            0,
+            0,
+            700,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            PCWSTR(face.as_ptr()),
+        );
+        (normal, bold, small, small_bold)
     }
 }
 
 fn build_lines(state: &AppState) -> Vec<Line> {
     let mut lines = Vec::new();
 
-    let restaurant = normalize_text(&state.restaurant_name);
+    let mut restaurant = normalize_text(&state.restaurant_name);
+    if state.stale_date {
+        if restaurant.is_empty() {
+            restaurant = "[STALE]".to_string();
+        } else {
+            restaurant = format!("[STALE] {}", restaurant);
+        }
+    }
     if !restaurant.is_empty() {
         lines.push(Line::Heading(restaurant));
     }
@@ -334,11 +395,22 @@ fn build_lines(state: &AppState) -> Vec<Line> {
     match &state.today_menu {
         Some(menu) => {
             if !menu.menus.is_empty() {
+                let price_groups = PriceGroups {
+                    student: state.settings.show_student_price,
+                    staff: state.settings.show_staff_price,
+                    guest: state.settings.show_guest_price,
+                };
                 append_menus(
                     &mut lines,
                     menu,
+                    state.provider,
                     state.settings.show_prices,
-                    state.settings.hide_allergens,
+                    price_groups,
+                    state.settings.show_allergens,
+                    state.settings.highlight_gluten_free,
+                    state.settings.highlight_veg,
+                    state.settings.highlight_lactose_free,
+                    state.settings.hide_expensive_student_meals,
                 );
             } else if state.status != FetchStatus::Loading {
                 lines.push(Line::Text(text_for(&state.settings.language, "noMenu")));
@@ -396,9 +468,28 @@ fn position_near_point(width: i32, height: i32, point: POINT) -> (i32, i32) {
     }
 }
 
-fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, show_prices: bool, hide_allergens: bool) {
+fn append_menus(
+    lines: &mut Vec<Line>,
+    menu: &TodayMenu,
+    provider: Provider,
+    show_prices: bool,
+    price_groups: PriceGroups,
+    show_allergens: bool,
+    highlight_gluten_free: bool,
+    highlight_veg: bool,
+    highlight_lactose_free: bool,
+    hide_expensive_student_meals: bool,
+) {
     for group in &menu.menus {
-        let heading = menu_heading(group, show_prices);
+        if provider == Provider::Compass && hide_expensive_student_meals {
+            if let Some(price) = student_price_eur(&group.price) {
+                if price > 4.0 {
+                    continue;
+                }
+            }
+        }
+
+        let heading = menu_heading(group, provider, show_prices, price_groups);
         lines.push(Line::Heading(heading));
         for component in &group.components {
             let component = normalize_text(component);
@@ -406,19 +497,77 @@ fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, show_prices: bool, hide
                 continue;
             }
             let (main, suffix) = split_component_suffix(&component);
-            if hide_allergens {
-                let value = if main.is_empty() { component } else { main };
-                lines.push(Line::Text(format!("▸ {}", value)));
+            let main_text = if main.is_empty() { component.clone() } else { main };
+            if !show_allergens {
+                lines.push(Line::Text(format!("▸ {}", main_text)));
             } else if !suffix.is_empty() {
-                lines.push(Line::TextWithSuffix {
-                    main: format!("▸ {}", main),
-                    suffix,
+                let segments = build_suffix_segments(
+                    &suffix,
+                    highlight_gluten_free,
+                    highlight_veg,
+                    highlight_lactose_free,
+                );
+                lines.push(Line::TextWithSuffixSegments {
+                    main: format!("▸ {}", main_text),
+                    segments,
                 });
             } else {
-                lines.push(Line::Text(format!("▸ {}", component)));
+                lines.push(Line::Text(format!("▸ {}", main_text)));
             }
         }
     }
+}
+
+fn build_suffix_segments(
+    suffix: &str,
+    highlight_gluten_free: bool,
+    highlight_veg: bool,
+    highlight_lactose_free: bool,
+) -> Vec<(String, bool)> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut token_mode = false;
+
+    let mut push_token = |token: &str, out: &mut Vec<(String, bool)>| {
+        if token.is_empty() {
+            return;
+        }
+        let upper = token.to_uppercase();
+        let highlight = (upper == "G" && highlight_gluten_free)
+            || (upper == "VEG" && highlight_veg)
+            || (upper == "L" && highlight_lactose_free);
+        out.push((token.to_string(), highlight));
+    };
+
+    for ch in suffix.chars() {
+        if ch.is_alphabetic() {
+            if !token_mode {
+                if !current.is_empty() {
+                    segments.push((current.clone(), false));
+                    current.clear();
+                }
+                token_mode = true;
+            }
+            current.push(ch);
+        } else {
+            if token_mode {
+                push_token(&current, &mut segments);
+                current.clear();
+                token_mode = false;
+            }
+            current.push(ch);
+        }
+    }
+
+    if !current.is_empty() {
+        if token_mode {
+            push_token(&current, &mut segments);
+        } else {
+            segments.push((current, false));
+        }
+    }
+
+    segments
 }
 
 fn is_visible(hwnd: HWND) -> bool {

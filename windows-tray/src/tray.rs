@@ -19,12 +19,22 @@ use windows::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW
 pub const CMD_RESTAURANT_0437: u16 = 2001;
 pub const CMD_RESTAURANT_0439: u16 = 2002;
 pub const CMD_RESTAURANT_0436: u16 = 2003;
+pub const CMD_RESTAURANT_ANTELL_HIGHWAY: u16 = 2004;
+pub const CMD_RESTAURANT_ANTELL_ROUND: u16 = 2005;
 pub const CMD_LANGUAGE_FI: u16 = 2101;
 pub const CMD_LANGUAGE_EN: u16 = 2102;
 pub const CMD_TOGGLE_SHOW_PRICES: u16 = 2201;
-pub const CMD_TOGGLE_DARK_MODE: u16 = 2202;
-pub const CMD_TOGGLE_HIDE_ALLERGENS: u16 = 2203;
-pub const CMD_TOGGLE_STARTUP: u16 = 2204;
+pub const CMD_TOGGLE_SHOW_ALLERGENS: u16 = 2202;
+pub const CMD_TOGGLE_HIGHLIGHT_G: u16 = 2203;
+pub const CMD_TOGGLE_HIGHLIGHT_VEG: u16 = 2204;
+pub const CMD_TOGGLE_HIGHLIGHT_L: u16 = 2205;
+pub const CMD_TOGGLE_SHOW_STUDENT_PRICE: u16 = 2206;
+pub const CMD_TOGGLE_SHOW_STAFF_PRICE: u16 = 2207;
+pub const CMD_TOGGLE_SHOW_GUEST_PRICE: u16 = 2208;
+pub const CMD_TOGGLE_HIDE_EXPENSIVE_STUDENT: u16 = 2209;
+pub const CMD_TOGGLE_ENABLE_ANTELL: u16 = 2210;
+pub const CMD_TOGGLE_DARK_MODE: u16 = 2211;
+pub const CMD_TOGGLE_STARTUP: u16 = 2212;
 pub const CMD_REFRESH_NOW: u16 = 2301;
 pub const CMD_REFRESH_OFF: u16 = 2400;
 pub const CMD_REFRESH_60: u16 = 2401;
@@ -183,6 +193,20 @@ fn build_context_menu(state: &AppState) -> HMENU {
             "Canthia",
             state.settings.restaurant_code == "0436",
         );
+        if state.settings.enable_antell_restaurants {
+            append_menu_item(
+                restaurant_menu,
+                CMD_RESTAURANT_ANTELL_HIGHWAY,
+                "Antell Highway",
+                state.settings.restaurant_code == "antell-highway",
+            );
+            append_menu_item(
+                restaurant_menu,
+                CMD_RESTAURANT_ANTELL_ROUND,
+                "Antell Round",
+                state.settings.restaurant_code == "antell-round",
+            );
+        }
         let _ = AppendMenuW(
             menu,
             MF_POPUP,
@@ -214,15 +238,81 @@ fn build_context_menu(state: &AppState) -> HMENU {
 
         append_menu_toggle(
             menu,
+            CMD_TOGGLE_ENABLE_ANTELL,
+            "Enable Antell restaurants",
+            state.settings.enable_antell_restaurants,
+        );
+
+        append_menu_toggle(
+            menu,
             CMD_TOGGLE_SHOW_PRICES,
             "Show prices",
             state.settings.show_prices,
         );
+        let price_menu = CreatePopupMenu().expect("CreatePopupMenu");
+        append_menu_toggle(
+            price_menu,
+            CMD_TOGGLE_SHOW_STUDENT_PRICE,
+            "Student",
+            state.settings.show_student_price,
+        );
+        append_menu_toggle(
+            price_menu,
+            CMD_TOGGLE_SHOW_STAFF_PRICE,
+            "Staff",
+            state.settings.show_staff_price,
+        );
+        append_menu_toggle(
+            price_menu,
+            CMD_TOGGLE_SHOW_GUEST_PRICE,
+            "Guest",
+            state.settings.show_guest_price,
+        );
+        let _ = AppendMenuW(
+            menu,
+            MF_POPUP,
+            price_menu.0 as usize,
+            PCWSTR(to_wstring("Price groups").as_ptr()),
+        );
         append_menu_toggle(
             menu,
-            CMD_TOGGLE_HIDE_ALLERGENS,
-            "Hide allergens",
-            state.settings.hide_allergens,
+            CMD_TOGGLE_HIDE_EXPENSIVE_STUDENT,
+            "Hide expensive student meals",
+            state.settings.hide_expensive_student_meals,
+        );
+        append_menu_toggle(
+            menu,
+            CMD_TOGGLE_SHOW_ALLERGENS,
+            "Show allergens",
+            state.settings.show_allergens,
+        );
+        let highlight_menu = CreatePopupMenu().expect("CreatePopupMenu");
+        append_menu_toggle_enabled(
+            highlight_menu,
+            CMD_TOGGLE_HIGHLIGHT_G,
+            "G",
+            state.settings.highlight_gluten_free,
+            state.settings.show_allergens,
+        );
+        append_menu_toggle_enabled(
+            highlight_menu,
+            CMD_TOGGLE_HIGHLIGHT_VEG,
+            "Veg",
+            state.settings.highlight_veg,
+            state.settings.show_allergens,
+        );
+        append_menu_toggle_enabled(
+            highlight_menu,
+            CMD_TOGGLE_HIGHLIGHT_L,
+            "L",
+            state.settings.highlight_lactose_free,
+            state.settings.show_allergens,
+        );
+        let _ = AppendMenuW(
+            menu,
+            MF_POPUP,
+            highlight_menu.0 as usize,
+            PCWSTR(to_wstring("Highlight allergens").as_ptr()),
         );
         append_menu_toggle(
             menu,
@@ -290,6 +380,19 @@ fn append_menu_item(menu: HMENU, id: u16, label: &str, checked: bool) {
 fn append_menu_toggle(menu: HMENU, id: u16, label: &str, enabled: bool) {
     unsafe {
         let flags = if enabled { MF_STRING | MF_CHECKED } else { MF_STRING };
+        let _ = AppendMenuW(menu, flags, id as usize, PCWSTR(to_wstring(label).as_ptr()));
+    }
+}
+
+fn append_menu_toggle_enabled(menu: HMENU, id: u16, label: &str, checked: bool, enabled: bool) {
+    unsafe {
+        let mut flags = MF_STRING;
+        if checked {
+            flags |= MF_CHECKED;
+        }
+        if !enabled {
+            flags |= MF_DISABLED | MF_GRAYED;
+        }
         let _ = AppendMenuW(menu, flags, id as usize, PCWSTR(to_wstring(label).as_ptr()));
     }
 }

@@ -1,12 +1,14 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod api;
+mod antell;
 mod app;
 mod cache;
 mod format;
 mod log;
 mod model;
 mod popup;
+mod restaurant;
 mod settings;
 mod startup;
 mod tray;
@@ -14,7 +16,11 @@ mod util;
 mod winmsg;
 
 use crate::app::App;
-use crate::format::{date_and_time_line, menu_heading, normalize_text, split_component_suffix, text_for};
+use crate::format::{
+    date_and_time_line, menu_heading, normalize_text, split_component_suffix, student_price_eur,
+    text_for, PriceGroups,
+};
+use crate::restaurant::{restaurant_for_code, Provider};
 use crate::settings::load_settings;
 use crate::util::to_wstring;
 use windows::core::PCWSTR;
@@ -89,8 +95,11 @@ fn main() -> anyhow::Result<()> {
         let app = &*app_ptr;
         app.set_hwnds(tray_hwnd, popup_hwnd);
         app.load_cache_for_current();
+        app.check_stale_date_and_refresh();
         winmsg::schedule_timers(tray_hwnd, app.refresh_minutes());
-        app.start_refresh();
+        if !app.snapshot().stale_date {
+            app.start_refresh();
+        }
 
         if !no_tray {
             match tray::add_tray_icon(tray_hwnd, winmsg::WM_TRAY_CALLBACK) {
@@ -146,19 +155,35 @@ fn print_today_menu() -> anyhow::Result<()> {
         println!("{}", date_line);
     }
 
+    let provider = restaurant_for_code(&settings.restaurant_code, settings.enable_antell_restaurants).provider;
+    let price_groups = PriceGroups {
+        student: settings.show_student_price,
+        staff: settings.show_staff_price,
+        guest: settings.show_guest_price,
+    };
     match &today_menu {
         Some(menu) => {
             if !menu.menus.is_empty() {
                 for group in &menu.menus {
-                    println!("{}", menu_heading(group, settings.show_prices));
+                    if provider == Provider::Compass && settings.hide_expensive_student_meals {
+                        if let Some(price) = student_price_eur(&group.price) {
+                            if price > 4.0 {
+                                continue;
+                            }
+                        }
+                    }
+                    println!(
+                        "{}",
+                        menu_heading(group, provider, settings.show_prices, price_groups)
+                    );
                     for component in &group.components {
                         let component = normalize_text(component);
                         if component.is_empty() {
                             continue;
                         }
                         let (main, suffix) = split_component_suffix(&component);
-                        if settings.hide_allergens {
-                            let value = if main.is_empty() { component } else { main };
+                        if !settings.show_allergens {
+                            let value = if main.is_empty() { component.clone() } else { main };
                             println!("  ▸ {}", value);
                         } else if !suffix.is_empty() {
                             println!("  ▸ {} {}", main, suffix);

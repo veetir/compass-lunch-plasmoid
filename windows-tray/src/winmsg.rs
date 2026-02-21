@@ -24,6 +24,7 @@ pub const WM_APP_FETCH_COMPLETE: u32 = WM_APP + 2;
 pub const TIMER_REFRESH: usize = 1;
 pub const TIMER_MIDNIGHT: usize = 2;
 pub const TIMER_HOVER_CHECK: usize = 3;
+pub const TIMER_STALE_CHECK: usize = 4;
 
 pub fn register_window_classes(hinstance: windows::Win32::Foundation::HINSTANCE) -> anyhow::Result<()> {
     unsafe {
@@ -109,6 +110,7 @@ pub unsafe extern "system" fn tray_wndproc(
                     log_line("tray left click cycle");
                     app.cycle_restaurant(1);
                     app.load_cache_for_current();
+                    app.check_stale_date_and_refresh();
                     app.maybe_refresh_on_selection();
                     if popup_is_visible(app.hwnd_popup()) {
                         let state = app.snapshot();
@@ -166,6 +168,9 @@ pub unsafe extern "system" fn tray_wndproc(
                 }
                 TIMER_HOVER_CHECK => {
                     handle_hover_check(hwnd, app);
+                }
+                TIMER_STALE_CHECK => {
+                    handle_stale_check(hwnd, app);
                 }
                 _ => {}
             }
@@ -261,16 +266,31 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
         tray::CMD_RESTAURANT_0437 => {
             app.set_restaurant("0437");
             app.load_cache_for_current();
+            app.check_stale_date_and_refresh();
             app.maybe_refresh_on_selection();
         }
         tray::CMD_RESTAURANT_0439 => {
             app.set_restaurant("0439");
             app.load_cache_for_current();
+            app.check_stale_date_and_refresh();
             app.maybe_refresh_on_selection();
         }
         tray::CMD_RESTAURANT_0436 => {
             app.set_restaurant("0436");
             app.load_cache_for_current();
+            app.check_stale_date_and_refresh();
+            app.maybe_refresh_on_selection();
+        }
+        tray::CMD_RESTAURANT_ANTELL_HIGHWAY => {
+            app.set_restaurant("antell-highway");
+            app.load_cache_for_current();
+            app.check_stale_date_and_refresh();
+            app.maybe_refresh_on_selection();
+        }
+        tray::CMD_RESTAURANT_ANTELL_ROUND => {
+            app.set_restaurant("antell-round");
+            app.load_cache_for_current();
+            app.check_stale_date_and_refresh();
             app.maybe_refresh_on_selection();
         }
         tray::CMD_LANGUAGE_FI => {
@@ -286,15 +306,42 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
         tray::CMD_TOGGLE_SHOW_PRICES => {
             app.toggle_show_prices();
         }
-        tray::CMD_TOGGLE_DARK_MODE => {
-            app.toggle_dark_mode();
+        tray::CMD_TOGGLE_SHOW_ALLERGENS => {
+            app.toggle_show_allergens();
             if popup_is_visible(app.hwnd_popup()) {
                 let state = app.snapshot();
                 popup::show_popup(app.hwnd_popup(), &state);
             }
         }
-        tray::CMD_TOGGLE_HIDE_ALLERGENS => {
-            app.toggle_hide_allergens();
+        tray::CMD_TOGGLE_HIGHLIGHT_G => {
+            app.toggle_highlight_gluten_free();
+        }
+        tray::CMD_TOGGLE_HIGHLIGHT_VEG => {
+            app.toggle_highlight_veg();
+        }
+        tray::CMD_TOGGLE_HIGHLIGHT_L => {
+            app.toggle_highlight_lactose_free();
+        }
+        tray::CMD_TOGGLE_SHOW_STUDENT_PRICE => {
+            app.toggle_show_student_price();
+        }
+        tray::CMD_TOGGLE_SHOW_STAFF_PRICE => {
+            app.toggle_show_staff_price();
+        }
+        tray::CMD_TOGGLE_SHOW_GUEST_PRICE => {
+            app.toggle_show_guest_price();
+        }
+        tray::CMD_TOGGLE_HIDE_EXPENSIVE_STUDENT => {
+            app.toggle_hide_expensive_student_meals();
+        }
+        tray::CMD_TOGGLE_ENABLE_ANTELL => {
+            app.toggle_enable_antell();
+            app.load_cache_for_current();
+            app.check_stale_date_and_refresh();
+            app.maybe_refresh_on_selection();
+        }
+        tray::CMD_TOGGLE_DARK_MODE => {
+            app.toggle_dark_mode();
             if popup_is_visible(app.hwnd_popup()) {
                 let state = app.snapshot();
                 popup::show_popup(app.hwnd_popup(), &state);
@@ -349,6 +396,7 @@ fn schedule_refresh_timer(hwnd: HWND, minutes: u32) {
 pub fn schedule_timers(hwnd: HWND, minutes: u32) {
     schedule_refresh_timer(hwnd, minutes);
     schedule_midnight_timer(hwnd);
+    schedule_stale_timer(hwnd);
 }
 
 fn schedule_midnight_timer(hwnd: HWND) {
@@ -361,6 +409,14 @@ fn schedule_midnight_timer(hwnd: HWND) {
         let duration = next_midnight - now;
         let millis = duration.whole_milliseconds().max(1000) as u32;
         let _ = SetTimer(hwnd, TIMER_MIDNIGHT, millis, None);
+    }
+}
+
+fn schedule_stale_timer(hwnd: HWND) {
+    unsafe {
+        KillTimer(hwnd, TIMER_STALE_CHECK);
+        let interval = 4 * 60 * 60 * 1000;
+        let _ = SetTimer(hwnd, TIMER_STALE_CHECK, interval, None);
     }
 }
 
@@ -414,6 +470,15 @@ fn handle_hover_check(hwnd: HWND, app: &App) {
         stop_hover_timer(hwnd);
         app.clear_hover_point();
     }
+}
+
+fn handle_stale_check(hwnd: HWND, app: &App) {
+    app.check_stale_date_and_refresh();
+    if popup_is_visible(app.hwnd_popup()) {
+        let state = app.snapshot();
+        popup::show_popup(app.hwnd_popup(), &state);
+    }
+    let _ = hwnd;
 }
 
 fn cursor_point() -> Option<POINT> {

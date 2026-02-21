@@ -1,4 +1,26 @@
 use crate::model::{MenuGroup, TodayMenu};
+use crate::restaurant::Provider;
+
+#[derive(Debug, Clone, Copy)]
+pub struct PriceGroups {
+    pub student: bool,
+    pub staff: bool,
+    pub guest: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PriceGroup {
+    Student,
+    Staff,
+    Guest,
+}
+
+#[derive(Debug, Clone)]
+struct PriceEntry {
+    group: PriceGroup,
+    text: String,
+    value: Option<f32>,
+}
 
 pub fn normalize_text(value: &str) -> String {
     let mut out = String::new();
@@ -66,9 +88,9 @@ pub fn text_for(language: &str, key: &str) -> String {
     if language == "fi" {
         match key {
             "loading" => "Ladataan ruokalistaa...".to_string(),
-            "noMenu" => "Talle paivalle ei ole lounaslistaa.".to_string(),
-            "stale" => "Ei verkkoyhteytta. Naytetaan viimeisin tallennettu lista".to_string(),
-            "fetchError" => "Paivitysvirhe".to_string(),
+            "noMenu" => "Tälle päivalle ei ole lounaslistaa.".to_string(),
+            "stale" => "Ei verkkoyhteytta. Näytetaan viimeisin tallennettu lista".to_string(),
+            "fetchError" => "Päivitysvirhe".to_string(),
             _ => key.to_string(),
         }
     } else {
@@ -82,14 +104,23 @@ pub fn text_for(language: &str, key: &str) -> String {
     }
 }
 
-pub fn menu_heading(menu: &MenuGroup, show_prices: bool) -> String {
+pub fn menu_heading(menu: &MenuGroup, provider: Provider, show_prices: bool, groups: PriceGroups) -> String {
     let mut heading = normalize_text(&menu.name);
     if heading.is_empty() {
         heading = "Menu".to_string();
     }
     let price = normalize_text(&menu.price);
     if show_prices && !price.is_empty() {
-        format!("{} - {}", heading, price)
+        if provider == Provider::Compass {
+            let filtered = price_text_for_groups(&price, groups);
+            if filtered.is_empty() {
+                heading
+            } else {
+                format!("{} - {}", heading, filtered)
+            }
+        } else {
+            format!("{} - {}", heading, price)
+        }
     } else {
         heading
     }
@@ -114,4 +145,81 @@ pub fn split_component_suffix(component: &str) -> (String, String) {
         }
     }
     (trimmed.to_string(), String::new())
+}
+
+pub fn student_price_eur(price: &str) -> Option<f32> {
+    let entries = parse_compass_price_entries(price);
+    entries
+        .into_iter()
+        .find(|entry| entry.group == PriceGroup::Student)
+        .and_then(|entry| entry.value)
+}
+
+fn price_text_for_groups(price: &str, groups: PriceGroups) -> String {
+    let entries = parse_compass_price_entries(price);
+    let mut parts = Vec::new();
+    for entry in entries {
+        let include = match entry.group {
+            PriceGroup::Student => groups.student,
+            PriceGroup::Staff => groups.staff,
+            PriceGroup::Guest => groups.guest,
+        };
+        if include {
+            parts.push(entry.text);
+        }
+    }
+    parts.join(" / ")
+}
+
+fn parse_compass_price_entries(price: &str) -> Vec<PriceEntry> {
+    let normalized = normalize_text(price);
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+    let mut entries = Vec::new();
+    for segment in normalized.split('/') {
+        let seg = segment.trim();
+        if seg.is_empty() {
+            continue;
+        }
+        let lower = seg.to_lowercase();
+        let group = if contains_any(&lower, &["student", "op", "opisk", "opiskelija"]) {
+            PriceGroup::Student
+        } else if contains_any(&lower, &["staff", "hk", "henkilokunta", "henkilökunta"]) {
+            PriceGroup::Staff
+        } else if contains_any(&lower, &["guest", "vieras"]) {
+            PriceGroup::Guest
+        } else {
+            PriceGroup::Guest
+        };
+        entries.push(PriceEntry {
+            group,
+            text: seg.to_string(),
+            value: parse_price_value(seg),
+        });
+    }
+    entries
+}
+
+fn contains_any(text: &str, tokens: &[&str]) -> bool {
+    tokens.iter().any(|token| text.contains(token))
+}
+
+fn parse_price_value(text: &str) -> Option<f32> {
+    let mut current = String::new();
+    let mut tokens: Vec<String> = Vec::new();
+    for ch in text.chars() {
+        if ch.is_ascii_digit() || ch == ',' || ch == '.' {
+            current.push(ch);
+        } else if !current.is_empty() {
+            tokens.push(current.clone());
+            current.clear();
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    let token = tokens.last()?.replace(',', ".");
+    let cleaned = token.trim_matches('.');
+    cleaned.parse::<f32>().ok()
 }
