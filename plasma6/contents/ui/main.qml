@@ -118,6 +118,11 @@ PlasmoidItem {
             payloadText: "",
             rawPayload: null,
             todayMenu: null,
+            menuDateIso: "",
+            providerDateValid: false,
+            isTodayFresh: false,
+            consecutiveFailures: 0,
+            nextRetryEpochMs: 0,
             restaurantName: "",
             restaurantUrl: ""
         }
@@ -197,6 +202,28 @@ PlasmoidItem {
         return year + "-" + month + "-" + day
     }
 
+    function todayIso() {
+        return localDateIso(new Date())
+    }
+
+    function isStateFreshForToday(state) {
+        if (!state) {
+            return false
+        }
+        return !!state.providerDateValid && MenuFormatter.normalizeText(state.menuDateIso) === todayIso()
+    }
+
+    function retryDelayMinutes(failureCount) {
+        var count = Math.max(1, Number(failureCount) || 1)
+        if (count <= 1) {
+            return 5
+        }
+        if (count === 2) {
+            return 10
+        }
+        return 15
+    }
+
     function weekdayToken(dateObj) {
         var names = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
         return names[dateObj.getDay()] || "monday"
@@ -263,13 +290,76 @@ PlasmoidItem {
         return sections
     }
 
+    function parseAntellMenuDateIso(menuDateText) {
+        var clean = MenuFormatter.normalizeText(menuDateText)
+        if (!clean) {
+            return ""
+        }
+
+        var parts = clean.match(/(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?/)
+        if (!parts) {
+            return ""
+        }
+
+        var day = Number(parts[1])
+        var month = Number(parts[2])
+        if (!isFinite(day) || !isFinite(month) || day < 1 || day > 31 || month < 1 || month > 12) {
+            return ""
+        }
+
+        function buildCandidate(yearNumber) {
+            var candidate = new Date(yearNumber, month - 1, day)
+            if (candidate.getFullYear() !== yearNumber || candidate.getMonth() !== month - 1 || candidate.getDate() !== day) {
+                return null
+            }
+            return candidate
+        }
+
+        if (parts[3]) {
+            var explicitYear = Number(parts[3])
+            if (!isFinite(explicitYear)) {
+                return ""
+            }
+            if (explicitYear < 100) {
+                explicitYear += 2000
+            }
+            var datedCandidate = buildCandidate(explicitYear)
+            return datedCandidate ? localDateIso(datedCandidate) : ""
+        }
+
+        var now = new Date()
+        var nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+        var years = [now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1]
+        var best = null
+        var bestDistance = Number.MAX_VALUE
+
+        for (var i = 0; i < years.length; i++) {
+            var candidate = buildCandidate(years[i])
+            if (!candidate) {
+                continue
+            }
+            var distance = Math.abs(candidate.getTime() - nowMidnight.getTime())
+            if (distance < bestDistance) {
+                bestDistance = distance
+                best = candidate
+            }
+        }
+
+        return best ? localDateIso(best) : ""
+    }
+
     function normalizeAntellTodayMenu(rawPayload) {
-        if (!rawPayload || rawPayload.provider !== "antell") {
+        if (!rawPayload || rawPayload.provider !== "antell" || !rawPayload.providerDateValid) {
+            return null
+        }
+
+        var menuDate = MenuFormatter.normalizeText(rawPayload.menuDateIso)
+        if (!menuDate) {
             return null
         }
 
         return {
-            dateIso: localDateIso(new Date()),
+            dateIso: menuDate,
             lunchTime: "",
             menus: parseAntellSections(rawPayload.htmlText)
         }
@@ -279,7 +369,11 @@ PlasmoidItem {
         var entry = restaurantEntryForCode(code)
         var payloadText = String(htmlText || "")
         var locationMatch = payloadText.match(/<div class="menu-location">([\s\S]*?)<\/div>/i)
+        var menuDateMatch = payloadText.match(/<div class="menu-date">([\s\S]*?)<\/div>/i)
         var location = stripHtmlText(locationMatch ? locationMatch[1] : "")
+        var menuDateText = stripHtmlText(menuDateMatch ? menuDateMatch[1] : "")
+        var menuDateIso = parseAntellMenuDateIso(menuDateText)
+        var isDateToday = menuDateIso && menuDateIso === todayIso()
         var fallbackName = entry ? String(entry.fallbackName || "Antell") : "Antell"
         var name = location
             ? (location.toLowerCase().indexOf("antell") === 0 ? location : ("Antell " + location))
@@ -288,6 +382,9 @@ PlasmoidItem {
         var rawPayload = {
             provider: "antell",
             htmlText: payloadText,
+            menuDateText: menuDateText,
+            menuDateIso: menuDateIso,
+            providerDateValid: !!isDateToday,
             restaurantName: name,
             restaurantUrl: url
         }
@@ -295,6 +392,8 @@ PlasmoidItem {
         return {
             rawPayload: rawPayload,
             todayMenu: normalizeAntellTodayMenu(rawPayload),
+            menuDateIso: menuDateIso,
+            providerDateValid: !!isDateToday,
             restaurantName: name,
             restaurantUrl: url
         }
@@ -332,11 +431,11 @@ PlasmoidItem {
             return null
         }
 
-        var todayIso = localDateIso(new Date())
+        var currentDateIso = todayIso()
 
         for (var i = 0; i < payload.MenusForDays.length; i++) {
             var day = payload.MenusForDays[i]
-            if (MenuFormatter.dayKey(day && day.Date) !== todayIso) {
+            if (MenuFormatter.dayKey(day && day.Date) !== currentDateIso) {
                 continue
             }
 
@@ -354,16 +453,20 @@ PlasmoidItem {
             }
 
             return {
-                dateIso: todayIso,
-                lunchTime: MenuFormatter.normalizeText(day.LunchTime),
-                menus: menus
+                todayMenu: {
+                    dateIso: currentDateIso,
+                    lunchTime: MenuFormatter.normalizeText(day.LunchTime),
+                    menus: menus
+                },
+                menuDateIso: currentDateIso,
+                providerDateValid: true
             }
         }
 
         return {
-            dateIso: todayIso,
-            lunchTime: "",
-            menus: []
+            todayMenu: null,
+            menuDateIso: "",
+            providerDateValid: false
         }
     }
 
@@ -400,12 +503,31 @@ PlasmoidItem {
         }
     }
 
+    function dateMismatchMessage() {
+        return "Date mismatch: expected " + todayIso()
+    }
+
     function setErrorStateForCode(code, message) {
         var current = stateFor(code)
+        if (isStateFreshForToday(current)) {
+            updateState(code, {
+                status: "ok",
+                errorMessage: "",
+                consecutiveFailures: 0,
+                nextRetryEpochMs: 0
+            })
+            return
+        }
+
+        var failureCount = (Number(current.consecutiveFailures) || 0) + 1
         updateState(code, {
             status: current.payloadText ? "stale" : "error",
-            errorMessage: message
+            errorMessage: message,
+            isTodayFresh: false,
+            consecutiveFailures: failureCount,
+            nextRetryEpochMs: Date.now() + retryDelayMinutes(failureCount) * 60 * 1000
         })
+        retryTimer.start()
     }
 
     function applyPayloadForCode(code, payloadText, fromCache, cachedTimestamp) {
@@ -413,6 +535,8 @@ PlasmoidItem {
         var provider = entry && entry.provider ? String(entry.provider) : "compass"
         var parsed = null
         var todayMenu = null
+        var menuDateIso = ""
+        var providerDateValid = false
         var restaurantName = ""
         var restaurantUrl = ""
 
@@ -420,6 +544,8 @@ PlasmoidItem {
             var antell = parseAntellPayload(code, payloadText)
             parsed = antell.rawPayload
             todayMenu = antell.todayMenu
+            menuDateIso = antell.menuDateIso
+            providerDateValid = antell.providerDateValid
             restaurantName = antell.restaurantName
             restaurantUrl = antell.restaurantUrl
         } else {
@@ -440,23 +566,58 @@ PlasmoidItem {
                 return false
             }
 
-            todayMenu = normalizeTodayMenu(parsed)
+            var normalizedCompass = normalizeTodayMenu(parsed)
+            if (!normalizedCompass) {
+                setErrorStateForCode(code, "Invalid menu payload")
+                return false
+            }
+
+            todayMenu = normalizedCompass.todayMenu
+            menuDateIso = normalizedCompass.menuDateIso
+            providerDateValid = normalizedCompass.providerDateValid
             restaurantName = MenuFormatter.normalizeText(parsed.RestaurantName) || "Compass Lunch"
             restaurantUrl = MenuFormatter.normalizeText(parsed.RestaurantUrl)
         }
 
         var updatedMs = fromCache ? (Number(cachedTimestamp) || 0) : Date.now()
+        var freshToday = !!providerDateValid && menuDateIso === todayIso()
+        var current = stateFor(code)
+        var failureCount = Number(current.consecutiveFailures) || 0
+
+        if (!freshToday && !fromCache) {
+            failureCount += 1
+        } else if (freshToday) {
+            failureCount = 0
+        }
+
+        var nextRetryEpochMs = Number(current.nextRetryEpochMs) || 0
+        if (freshToday) {
+            nextRetryEpochMs = 0
+        } else if (!fromCache) {
+            nextRetryEpochMs = Date.now() + retryDelayMinutes(failureCount) * 60 * 1000
+        } else if (!isFinite(nextRetryEpochMs) || nextRetryEpochMs < 0) {
+            nextRetryEpochMs = 0
+        }
 
         updateState(code, {
-            status: fromCache ? "stale" : "ok",
-            errorMessage: "",
+            status: freshToday ? "ok" : "stale",
+            errorMessage: freshToday ? "" : dateMismatchMessage(),
             lastUpdatedEpochMs: updatedMs,
             payloadText: payloadText,
             rawPayload: parsed,
             todayMenu: todayMenu,
+            menuDateIso: menuDateIso,
+            providerDateValid: !!providerDateValid,
+            isTodayFresh: freshToday,
+            consecutiveFailures: failureCount,
+            nextRetryEpochMs: nextRetryEpochMs,
             restaurantName: restaurantName,
             restaurantUrl: restaurantUrl
         })
+
+        if (!freshToday && !fromCache) {
+            retryTimer.start()
+        }
 
         if (String(code) === activeRestaurantCode) {
             syncSettingsLastUpdatedDisplay()
@@ -481,20 +642,15 @@ PlasmoidItem {
         }
     }
 
-    function refreshTodayMenusFromPayload() {
+    function rederiveStateFromCachedPayload() {
         var codes = restaurantCodes()
         for (var i = 0; i < codes.length; i++) {
             var code = codes[i]
             var state = stateFor(code)
-            if (!state.rawPayload) {
+            if (!state.payloadText) {
                 continue
             }
-            var refreshedMenu = state.rawPayload.provider === "antell"
-                ? normalizeAntellTodayMenu(state.rawPayload)
-                : normalizeTodayMenu(state.rawPayload)
-            updateState(code, {
-                todayMenu: refreshedMenu
-            })
+            applyPayloadForCode(code, state.payloadText, true, state.lastUpdatedEpochMs)
         }
     }
 
@@ -520,10 +676,14 @@ PlasmoidItem {
         }
 
         var normalized = String(code)
+        var current = stateFor(normalized)
+        if (!manual && current.status === "loading") {
+            return
+        }
+
         requestSerialByCode[normalized] = (requestSerialByCode[normalized] || 0) + 1
         var requestSerial = requestSerialByCode[normalized]
 
-        var current = stateFor(normalized)
         if (!current.payloadText) {
             updateState(normalized, {
                 status: "loading",
@@ -573,10 +733,44 @@ PlasmoidItem {
         xhr.send()
     }
 
-    function refreshAllRestaurants(manual) {
+    function evaluateFreshnessAndRefresh(forceNetwork, manual) {
         var codes = restaurantCodes()
         for (var i = 0; i < codes.length; i++) {
-            fetchRestaurant(codes[i], manual)
+            var code = codes[i]
+            if (forceNetwork || manual) {
+                fetchRestaurant(code, !!manual)
+                continue
+            }
+
+            var state = stateFor(code)
+            if (!isStateFreshForToday(state)) {
+                fetchRestaurant(code, false)
+            }
+        }
+    }
+
+    function processDueRetries() {
+        var nowMs = Date.now()
+        var codes = restaurantCodes()
+        var hasPendingRetry = false
+
+        for (var i = 0; i < codes.length; i++) {
+            var code = codes[i]
+            var state = stateFor(code)
+            var dueMs = Number(state.nextRetryEpochMs) || 0
+
+            if (!dueMs || isStateFreshForToday(state)) {
+                continue
+            }
+
+            hasPendingRetry = true
+            if (dueMs <= nowMs) {
+                fetchRestaurant(code, false)
+            }
+        }
+
+        if (!hasPendingRetry) {
+            retryTimer.stop()
         }
     }
 
@@ -613,14 +807,18 @@ PlasmoidItem {
         var nextIdx = (idx + step + codes.length) % codes.length
         activeRestaurantCode = codes[nextIdx]
 
-        if (!stateFor(activeRestaurantCode).payloadText) {
+        if (!isStateFreshForToday(stateFor(activeRestaurantCode))) {
             fetchRestaurant(activeRestaurantCode, false)
         }
     }
 
     function tooltipMainText() {
         var state = stateFor(activeRestaurantCode)
-        return state.restaurantName || "Compass Lunch"
+        var title = state.restaurantName || "Compass Lunch"
+        if (state.status === "stale" && !state.isTodayFresh) {
+            return "[STALE] " + title
+        }
+        return title
     }
 
     function tooltipSubText() {
@@ -677,13 +875,13 @@ PlasmoidItem {
         activeRestaurantCode = configRestaurantCode
         loadCacheStore()
         loadCachedPayloadsForCurrentLanguage()
-        refreshAllRestaurants(false)
+        evaluateFreshnessAndRefresh(false, false)
         syncSettingsLastUpdatedDisplay()
     }
 
     onConfigRestaurantCodeChanged: {
         activeRestaurantCode = configRestaurantCode
-        if (!stateFor(activeRestaurantCode).payloadText) {
+        if (!isStateFreshForToday(stateFor(activeRestaurantCode))) {
             fetchRestaurant(activeRestaurantCode, false)
         }
         syncSettingsLastUpdatedDisplay()
@@ -696,7 +894,7 @@ PlasmoidItem {
         activeRestaurantCode = configRestaurantCode
         loadCacheStore()
         loadCachedPayloadsForCurrentLanguage()
-        refreshAllRestaurants(false)
+        evaluateFreshnessAndRefresh(false, false)
         syncSettingsLastUpdatedDisplay()
     }
 
@@ -705,7 +903,7 @@ PlasmoidItem {
         activeRestaurantCode = configRestaurantCode
         loadCacheStore()
         loadCachedPayloadsForCurrentLanguage()
-        refreshAllRestaurants(false)
+        evaluateFreshnessAndRefresh(false, false)
         syncSettingsLastUpdatedDisplay()
     }
 
@@ -721,7 +919,7 @@ PlasmoidItem {
         if (!initialized) {
             return
         }
-        refreshAllRestaurants(true)
+        evaluateFreshnessAndRefresh(true, true)
     }
 
     Component.onCompleted: {
@@ -735,7 +933,15 @@ PlasmoidItem {
         interval: Math.max(1, root.configRefreshMinutes) * 60 * 1000
         running: root.configRefreshMinutes > 0
         repeat: true
-        onTriggered: root.refreshAllRestaurants(false)
+        onTriggered: root.evaluateFreshnessAndRefresh(false, false)
+    }
+
+    Timer {
+        id: retryTimer
+        interval: 30000
+        running: false
+        repeat: true
+        onTriggered: root.processDueRetries()
     }
 
     Timer {
@@ -743,8 +949,8 @@ PlasmoidItem {
         repeat: false
         running: false
         onTriggered: {
-            root.refreshTodayMenusFromPayload()
-            root.refreshAllRestaurants(false)
+            root.rederiveStateFromCachedPayload()
+            root.evaluateFreshnessAndRefresh(false, false)
             root.scheduleMidnightTimer()
         }
     }
