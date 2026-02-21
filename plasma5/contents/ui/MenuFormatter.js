@@ -64,9 +64,9 @@ function dateAndTimeLine(todayMenu, language) {
 function textFor(language, key) {
     var fi = {
         loading: "Ladataan ruokalistaa...",
-        noMenu: "Talle paivalle ei ole lounaslistaa.",
-        stale: "Ei verkkoyhteytta. Naytetaan viimeisin tallennettu lista",
-        fetchError: "Paivitysvirhe"
+        noMenu: "Tälle päivalle ei ole lounaslistaa.",
+        stale: "Ei verkkoyhteytta. Näytetaan viimeisin tallennettu lista",
+        fetchError: "Päivitysvirhe"
     };
 
     var en = {
