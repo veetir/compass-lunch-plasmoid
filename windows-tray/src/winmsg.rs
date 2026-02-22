@@ -97,9 +97,10 @@ pub unsafe extern "system" fn tray_wndproc(
                             event, event_raw
                         ));
                         let state = app.snapshot();
-                        if let Some((x, y)) = app.hover_point() {
-                            let anchor = POINT { x, y };
-                            popup::show_popup_at(app.hwnd_popup(), &state, anchor);
+                        if let Some(rect) = tray::tray_icon_rect(hwnd) {
+                            popup::show_popup_for_tray_icon(app.hwnd_popup(), &state, rect);
+                        } else if let Some((x, y)) = app.hover_point() {
+                            popup::show_popup_at(app.hwnd_popup(), &state, POINT { x, y });
                         } else {
                             popup::show_popup(app.hwnd_popup(), &state);
                         }
@@ -114,12 +115,7 @@ pub unsafe extern "system" fn tray_wndproc(
                     app.maybe_refresh_on_selection();
                     if popup_is_visible(app.hwnd_popup()) {
                         let state = app.snapshot();
-                        if let Some((x, y)) = app.hover_point() {
-                            let anchor = POINT { x, y };
-                            popup::show_popup_at(app.hwnd_popup(), &state, anchor);
-                        } else {
-                            popup::resize_popup_keep_position(app.hwnd_popup(), &state);
-                        }
+                        popup::resize_popup_keep_position(app.hwnd_popup(), &state);
                     }
                 }
                 WM_RBUTTONUP => {}
@@ -197,7 +193,7 @@ pub unsafe extern "system" fn tray_wndproc(
                         app.prefetch_enabled_restaurants();
                         let state = app.snapshot();
                         if popup_is_visible(app.hwnd_popup()) {
-                            popup::show_popup(app.hwnd_popup(), &state);
+                            popup::resize_popup_keep_position(app.hwnd_popup(), &state);
                         } else {
                             popup::hide_popup(app.hwnd_popup());
                         }
@@ -207,7 +203,7 @@ pub unsafe extern "system" fn tray_wndproc(
                         schedule_retry_timer(hwnd, delay);
                         let state = app.snapshot();
                         if popup_is_visible(app.hwnd_popup()) {
-                            popup::show_popup(app.hwnd_popup(), &state);
+                            popup::resize_popup_keep_position(app.hwnd_popup(), &state);
                         }
                     }
                     FetchApplyOutcome::BackgroundSuccess | FetchApplyOutcome::BackgroundFailure => {}
@@ -331,7 +327,7 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
             app.toggle_show_allergens();
             if popup_is_visible(app.hwnd_popup()) {
                 let state = app.snapshot();
-                popup::show_popup(app.hwnd_popup(), &state);
+                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
             }
         }
         tray::CMD_TOGGLE_HIGHLIGHT_G => {
@@ -365,7 +361,7 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
             app.toggle_dark_mode();
             if popup_is_visible(app.hwnd_popup()) {
                 let state = app.snapshot();
-                popup::show_popup(app.hwnd_popup(), &state);
+                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
             }
         }
         tray::CMD_TOGGLE_STARTUP => {
@@ -403,7 +399,7 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
     }
     if popup_is_visible(app.hwnd_popup()) {
         let state = app.snapshot();
-        popup::show_popup(app.hwnd_popup(), &state);
+        popup::resize_popup_keep_position(app.hwnd_popup(), &state);
     }
 }
 
@@ -498,10 +494,13 @@ fn handle_hover_check(hwnd: HWND, app: &App) {
     let in_popup = unsafe { GetWindowRect(popup_hwnd, &mut rect).is_ok() }
         && point_in_rect(&rect, cursor.x, cursor.y);
 
-    let in_tray = app
-        .hover_point()
-        .map(|(x, y)| (cursor.x - x).abs() <= 32 && (cursor.y - y).abs() <= 32)
-        .unwrap_or(false);
+    let in_tray = tray::tray_icon_rect(app.hwnd_tray())
+        .map(|rect| point_in_rect(&rect, cursor.x, cursor.y))
+        .unwrap_or_else(|| {
+            app.hover_point()
+                .map(|(x, y)| (cursor.x - x).abs() <= 32 && (cursor.y - y).abs() <= 32)
+                .unwrap_or(false)
+        });
 
     if !(in_popup || in_tray) {
         popup::hide_popup(popup_hwnd);
@@ -514,7 +513,7 @@ fn handle_stale_check(hwnd: HWND, app: &App) {
     app.check_stale_date_and_refresh();
     if popup_is_visible(app.hwnd_popup()) {
         let state = app.snapshot();
-        popup::show_popup(app.hwnd_popup(), &state);
+        popup::resize_popup_keep_position(app.hwnd_popup(), &state);
     }
     let _ = hwnd;
 }

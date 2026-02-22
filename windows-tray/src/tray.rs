@@ -3,10 +3,10 @@ use crate::log::log_line;
 use crate::util::to_wstring;
 use std::path::{Path, PathBuf};
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NOTIFYICONDATAW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
-    NIM_SETVERSION, NOTIFYICON_VERSION_4,
+    Shell_NotifyIconGetRect, Shell_NotifyIconW, NOTIFYICONDATAW, NOTIFYICONIDENTIFIER, NIF_ICON,
+    NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_SETVERSION, NOTIFYICON_VERSION_4,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, GetCursorPos, LoadIconW, LoadImageW, PostMessageW,
@@ -42,6 +42,7 @@ pub const CMD_REFRESH_60: u16 = 2401;
 pub const CMD_REFRESH_240: u16 = 2402;
 pub const CMD_REFRESH_1440: u16 = 2403;
 pub const CMD_QUIT: u16 = 2999;
+const TRAY_ICON_ID: u32 = 1;
 
 pub fn add_tray_icon(hwnd: HWND, callback_message: u32) -> anyhow::Result<()> {
     unsafe {
@@ -49,7 +50,7 @@ pub fn add_tray_icon(hwnd: HWND, callback_message: u32) -> anyhow::Result<()> {
         let mut data = NOTIFYICONDATAW::default();
         data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
         data.hWnd = hwnd;
-        data.uID = 1;
+        data.uID = TRAY_ICON_ID;
         data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         data.uCallbackMessage = callback_message;
         data.hIcon = icon;
@@ -75,9 +76,17 @@ pub fn remove_tray_icon(hwnd: HWND) {
         let mut data = NOTIFYICONDATAW::default();
         data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
         data.hWnd = hwnd;
-        data.uID = 1;
+        data.uID = TRAY_ICON_ID;
         let _ = Shell_NotifyIconW(NIM_DELETE, &mut data);
     }
+}
+
+pub fn tray_icon_rect(hwnd: HWND) -> Option<RECT> {
+    let mut ident = NOTIFYICONIDENTIFIER::default();
+    ident.cbSize = std::mem::size_of::<NOTIFYICONIDENTIFIER>() as u32;
+    ident.hWnd = hwnd;
+    ident.uID = TRAY_ICON_ID;
+    unsafe { Shell_NotifyIconGetRect(&ident).ok() }
 }
 
 fn load_icon() -> HICON {

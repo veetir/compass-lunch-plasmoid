@@ -22,6 +22,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const PADDING_X: i32 = 12;
 const PADDING_Y: i32 = 10;
 const LINE_GAP: i32 = 2;
+const ANCHOR_GAP: i32 = 10;
 
 #[derive(Debug, Clone)]
 enum Line {
@@ -64,6 +65,23 @@ pub fn show_popup_at(hwnd: HWND, state: &AppState, anchor: POINT) {
     unsafe {
         let (width, height) = desired_size(hwnd, state);
         let (x, y) = position_near_point(width, height, anchor);
+        let _ = SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            x,
+            y,
+            width,
+            height,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+        InvalidateRect(hwnd, None, true);
+    }
+}
+
+pub fn show_popup_for_tray_icon(hwnd: HWND, state: &AppState, tray_rect: RECT) {
+    unsafe {
+        let (width, height) = desired_size(hwnd, state);
+        let (x, y) = position_near_tray_rect(width, height, tray_rect);
         let _ = SetWindowPos(
             hwnd,
             HWND_TOPMOST,
@@ -464,6 +482,47 @@ fn position_near_point(width: i32, height: i32, point: POINT) -> (i32, i32) {
         }
         if x + width > work_area.right {
             x = work_area.right - width;
+        }
+        if y + height > work_area.bottom {
+            y = work_area.bottom - height;
+        }
+
+        (x, y)
+    }
+}
+
+fn position_near_tray_rect(width: i32, height: i32, tray_rect: RECT) -> (i32, i32) {
+    unsafe {
+        let center = POINT {
+            x: (tray_rect.left + tray_rect.right) / 2,
+            y: (tray_rect.top + tray_rect.bottom) / 2,
+        };
+        let monitor = MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO::default();
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        let mut work_area = RECT::default();
+        if GetMonitorInfoW(monitor, &mut info).as_bool() {
+            work_area = info.rcWork;
+        }
+
+        let mut x = tray_rect.right - width;
+        let mut y = tray_rect.top - height - ANCHOR_GAP;
+
+        if y < work_area.top {
+            y = tray_rect.bottom + ANCHOR_GAP;
+        }
+        if y + height > work_area.bottom {
+            y = (tray_rect.top - height - ANCHOR_GAP).max(work_area.top);
+        }
+
+        if x < work_area.left {
+            x = work_area.left;
+        }
+        if x + width > work_area.right {
+            x = work_area.right - width;
+        }
+        if y < work_area.top {
+            y = work_area.top;
         }
         if y + height > work_area.bottom {
             y = work_area.bottom - height;
