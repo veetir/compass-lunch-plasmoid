@@ -178,33 +178,109 @@ fn parse_compass_price_entries(price: &str) -> Vec<PriceEntry> {
     if normalized.is_empty() {
         return Vec::new();
     }
-    let mut entries = Vec::new();
-    for segment in normalized.split('/') {
-        let seg = segment.trim();
-        if seg.is_empty() {
-            continue;
-        }
-        let lower = seg.to_lowercase();
-        let group = if contains_any(&lower, &["student", "op", "opisk", "opiskelija"]) {
-            PriceGroup::Student
-        } else if contains_any(&lower, &["staff", "hk", "henkilokunta", "henkilökunta"]) {
-            PriceGroup::Staff
-        } else if contains_any(&lower, &["guest", "vieras"]) {
-            PriceGroup::Guest
-        } else {
-            PriceGroup::Guest
-        };
-        entries.push(PriceEntry {
-            group,
-            text: seg.to_string(),
-            value: parse_price_value(seg),
-        });
-    }
-    entries
+    split_compass_price_segments(&normalized)
+        .into_iter()
+        .map(|segment| PriceEntry {
+            group: classify_compass_price_group(&segment),
+            value: parse_price_value(&segment),
+            text: segment,
+        })
+        .collect()
 }
 
-fn contains_any(text: &str, tokens: &[&str]) -> bool {
-    tokens.iter().any(|token| text.contains(token))
+fn split_compass_price_segments(price: &str) -> Vec<String> {
+    let slash_segments: Vec<String> = price
+        .split('/')
+        .map(normalize_text)
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    if slash_segments.len() > 1 {
+        return slash_segments;
+    }
+
+    let starts = group_label_starts(price);
+    if starts.len() <= 1 {
+        return slash_segments
+            .into_iter()
+            .next()
+            .map(|segment| vec![segment])
+            .unwrap_or_else(|| vec![price.to_string()]);
+    }
+
+    let mut segments = Vec::new();
+    for (idx, start) in starts.iter().enumerate() {
+        let end = starts.get(idx + 1).copied().unwrap_or(price.len());
+        let segment = normalize_text(&price[*start..end]);
+        if !segment.is_empty() {
+            segments.push(segment);
+        }
+    }
+
+    if segments.is_empty() {
+        vec![price.to_string()]
+    } else {
+        segments
+    }
+}
+
+fn classify_compass_price_group(segment: &str) -> PriceGroup {
+    let lower = segment.to_lowercase();
+    if has_any_word_label(&lower, &["student", "op", "opisk", "opiskelija"]) {
+        PriceGroup::Student
+    } else if has_any_word_label(&lower, &["staff", "hk", "henkilokunta", "henkilökunta"]) {
+        PriceGroup::Staff
+    } else if has_any_word_label(&lower, &["guest", "vieras"]) {
+        PriceGroup::Guest
+    } else {
+        PriceGroup::Guest
+    }
+}
+
+fn group_label_starts(text: &str) -> Vec<usize> {
+    let lower = text.to_lowercase();
+    let mut starts = Vec::new();
+    for label in [
+        "student",
+        "staff",
+        "guest",
+        "opiskelija",
+        "opisk",
+        "op",
+        "henkilokunta",
+        "henkilökunta",
+        "hk",
+        "vieras",
+    ] {
+        for (start, _) in lower.match_indices(label) {
+            if is_word_boundary(&lower, start, label.len()) {
+                starts.push(start);
+            }
+        }
+    }
+    starts.sort_unstable();
+    starts.dedup();
+    starts
+}
+
+fn has_any_word_label(text: &str, labels: &[&str]) -> bool {
+    labels
+        .iter()
+        .any(|label| text.match_indices(label).any(|(idx, _)| is_word_boundary(text, idx, label.len())))
+}
+
+fn is_word_boundary(text: &str, start: usize, len: usize) -> bool {
+    let prev_ok = text[..start]
+        .chars()
+        .next_back()
+        .map(|ch| !ch.is_alphabetic())
+        .unwrap_or(true);
+    let end = start + len;
+    let next_ok = text[end..]
+        .chars()
+        .next()
+        .map(|ch| !ch.is_alphabetic())
+        .unwrap_or(true);
+    prev_ok && next_ok
 }
 
 fn parse_price_value(text: &str) -> Option<f32> {
