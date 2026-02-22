@@ -18,6 +18,7 @@ pub struct Settings {
     pub highlight_veg: bool,
     pub highlight_lactose_free: bool,
     pub enable_antell_restaurants: bool,
+    pub enable_logging: bool,
     pub last_updated_epoch_ms: i64,
 }
 
@@ -38,6 +39,7 @@ impl Default for Settings {
             highlight_veg: false,
             highlight_lactose_free: false,
             enable_antell_restaurants: true,
+            enable_logging: false,
             last_updated_epoch_ms: 0,
         }
     }
@@ -85,6 +87,7 @@ struct RawSettings {
     highlight_veg: Option<bool>,
     highlight_lactose_free: Option<bool>,
     enable_antell_restaurants: Option<bool>,
+    enable_logging: Option<bool>,
     last_updated_epoch_ms: Option<i64>,
 }
 
@@ -118,6 +121,7 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
         enable_antell_restaurants: raw
             .enable_antell_restaurants
             .unwrap_or(defaults.enable_antell_restaurants),
+        enable_logging: raw.enable_logging.unwrap_or(defaults.enable_logging),
         last_updated_epoch_ms: raw
             .last_updated_epoch_ms
             .unwrap_or(defaults.last_updated_epoch_ms),

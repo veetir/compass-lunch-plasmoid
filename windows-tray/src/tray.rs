@@ -35,6 +35,7 @@ pub const CMD_TOGGLE_HIDE_EXPENSIVE_STUDENT: u16 = 2209;
 pub const CMD_TOGGLE_ENABLE_ANTELL: u16 = 2210;
 pub const CMD_TOGGLE_DARK_MODE: u16 = 2211;
 pub const CMD_TOGGLE_STARTUP: u16 = 2212;
+pub const CMD_TOGGLE_LOGGING: u16 = 2213;
 pub const CMD_REFRESH_NOW: u16 = 2301;
 pub const CMD_REFRESH_OFF: u16 = 2400;
 pub const CMD_REFRESH_60: u16 = 2401;
@@ -325,6 +326,19 @@ fn build_context_menu(state: &AppState) -> HMENU {
             CMD_TOGGLE_STARTUP,
             "Run at startup",
             crate::startup::is_enabled(),
+        );
+        let developer_menu = CreatePopupMenu().expect("CreatePopupMenu");
+        append_menu_toggle(
+            developer_menu,
+            CMD_TOGGLE_LOGGING,
+            "Enable logging",
+            state.settings.enable_logging,
+        );
+        let _ = AppendMenuW(
+            menu,
+            MF_POPUP,
+            developer_menu.0 as usize,
+            PCWSTR(to_wstring("Developer").as_ptr()),
         );
 
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());

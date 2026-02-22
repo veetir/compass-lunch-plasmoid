@@ -1,7 +1,10 @@
 use std::fs::{create_dir_all, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static LOG_ENABLED: AtomicBool = AtomicBool::new(false);
 
 fn log_path() -> PathBuf {
     let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".to_string());
@@ -10,7 +13,15 @@ fn log_path() -> PathBuf {
         .join("compass-lunch.log")
 }
 
+pub fn set_enabled(enabled: bool) {
+    LOG_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
 pub fn log_line(message: &str) {
+    if !LOG_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+
     let path = log_path();
     if let Some(parent) = path.parent() {
         let _ = create_dir_all(parent);

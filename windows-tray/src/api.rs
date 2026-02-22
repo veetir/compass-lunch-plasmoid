@@ -144,6 +144,7 @@ fn parse_response(api: ApiResponse, raw_json: String) -> FetchOutput {
     let today_key = local_today_key();
     let menus_for_days = api.menus_for_days.unwrap_or_default();
     let mut today_menu: Option<TodayMenu> = None;
+    let mut fallback_payload_date = String::new();
     let mut payload_date = String::new();
 
     for day in menus_for_days {
@@ -152,8 +153,10 @@ fn parse_response(api: ApiResponse, raw_json: String) -> FetchOutput {
             .next()
             .unwrap_or("")
             .to_string();
-        if !date_key.is_empty() && (payload_date.is_empty() || date_key > payload_date) {
-            payload_date = date_key.clone();
+        if !date_key.is_empty()
+            && (fallback_payload_date.is_empty() || date_key > fallback_payload_date)
+        {
+            fallback_payload_date = date_key.clone();
         }
         if date_key == today_key {
             let lunch_time = normalize_optional(day.lunch_time.as_deref());
@@ -164,8 +167,13 @@ fn parse_response(api: ApiResponse, raw_json: String) -> FetchOutput {
                 lunch_time,
                 menus,
             });
+            payload_date = today_key.clone();
             break;
         }
+    }
+
+    if payload_date.is_empty() {
+        payload_date = fallback_payload_date;
     }
 
     FetchOutput {

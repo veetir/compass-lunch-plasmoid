@@ -35,10 +35,12 @@ fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let print_today = args.iter().any(|a| a == "--print-today");
     let no_tray = args.iter().any(|a| a == "--no-tray");
+    let boot_settings = load_settings();
+    log::set_enabled(boot_settings.enable_logging);
 
     if print_today {
         ensure_console();
-        return print_today_menu();
+        return print_today_menu_with_settings(&boot_settings);
     }
 
     unsafe {
@@ -94,12 +96,10 @@ fn main() -> anyhow::Result<()> {
 
         let app = &*app_ptr;
         app.set_hwnds(tray_hwnd, popup_hwnd);
-        app.load_cache_for_current();
-        app.check_stale_date_and_refresh();
+        let _ = app.load_cache_for_current();
         winmsg::schedule_timers(tray_hwnd, app.refresh_minutes());
-        if !app.snapshot().stale_date {
-            app.start_refresh();
-        }
+        app.check_stale_date_and_refresh();
+        app.start_refresh();
 
         if !no_tray {
             match tray::add_tray_icon(tray_hwnd, winmsg::WM_TRAY_CALLBACK) {
@@ -141,9 +141,8 @@ fn ensure_console() {
 #[cfg(not(target_os = "windows"))]
 fn ensure_console() {}
 
-fn print_today_menu() -> anyhow::Result<()> {
-    let settings = load_settings();
-    let result = api::fetch_today(&settings);
+fn print_today_menu_with_settings(settings: &crate::settings::Settings) -> anyhow::Result<()> {
+    let result = api::fetch_today(settings);
     if !result.ok {
         eprintln!("{}: {}", text_for(&settings.language, "fetchError"), result.error_message);
         return Ok(());

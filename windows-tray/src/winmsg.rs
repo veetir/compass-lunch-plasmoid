@@ -1,5 +1,4 @@
-use crate::api;
-use crate::app::App;
+use crate::app::{App, FetchApplyOutcome, FetchMessage};
 use crate::log::log_line;
 use crate::popup;
 use crate::tray;
@@ -25,6 +24,7 @@ pub const TIMER_REFRESH: usize = 1;
 pub const TIMER_MIDNIGHT: usize = 2;
 pub const TIMER_HOVER_CHECK: usize = 3;
 pub const TIMER_STALE_CHECK: usize = 4;
+pub const TIMER_RETRY_FETCH: usize = 5;
 
 pub fn register_window_classes(hinstance: windows::Win32::Foundation::HINSTANCE) -> anyhow::Result<()> {
     unsafe {
@@ -109,7 +109,7 @@ pub unsafe extern "system" fn tray_wndproc(
                 WM_LBUTTONUP => {
                     log_line("tray left click cycle");
                     app.cycle_restaurant(1);
-                    app.load_cache_for_current();
+                    let _ = app.load_cache_for_current();
                     app.check_stale_date_and_refresh();
                     app.maybe_refresh_on_selection();
                     if popup_is_visible(app.hwnd_popup()) {
@@ -172,6 +172,10 @@ pub unsafe extern "system" fn tray_wndproc(
                 TIMER_STALE_CHECK => {
                     handle_stale_check(hwnd, app);
                 }
+                TIMER_RETRY_FETCH => {
+                    let _ = KillTimer(hwnd, TIMER_RETRY_FETCH);
+                    app.start_refresh_retry();
+                }
                 _ => {}
             }
             LRESULT(0)
@@ -182,15 +186,31 @@ pub unsafe extern "system" fn tray_wndproc(
                 return LRESULT(0);
             }
             let app = &*(app);
-            let ptr = lparam.0 as *mut api::FetchOutput;
+            let ptr = lparam.0 as *mut FetchMessage;
             if !ptr.is_null() {
-                let result = *Box::from_raw(ptr);
-                app.apply_fetch_result(result);
-                let state = app.snapshot();
-                if popup_is_visible(app.hwnd_popup()) {
-                    popup::show_popup(app.hwnd_popup(), &state);
-                } else {
-                    popup::hide_popup(app.hwnd_popup());
+                let message = *Box::from_raw(ptr);
+                let outcome = app.apply_fetch_message(message);
+                match outcome {
+                    FetchApplyOutcome::CurrentSuccess => {
+                        cancel_retry_timer(hwnd);
+                        app.reset_retry_backoff();
+                        app.prefetch_enabled_restaurants();
+                        let state = app.snapshot();
+                        if popup_is_visible(app.hwnd_popup()) {
+                            popup::show_popup(app.hwnd_popup(), &state);
+                        } else {
+                            popup::hide_popup(app.hwnd_popup());
+                        }
+                    }
+                    FetchApplyOutcome::CurrentFailure => {
+                        let delay = app.next_retry_delay_ms();
+                        schedule_retry_timer(hwnd, delay);
+                        let state = app.snapshot();
+                        if popup_is_visible(app.hwnd_popup()) {
+                            popup::show_popup(app.hwnd_popup(), &state);
+                        }
+                    }
+                    FetchApplyOutcome::BackgroundSuccess | FetchApplyOutcome::BackgroundFailure => {}
                 }
             }
             LRESULT(0)
@@ -200,11 +220,10 @@ pub unsafe extern "system" fn tray_wndproc(
             if !app.is_null() {
                 let app_ref = &*(app);
                 tray::remove_tray_icon(hwnd);
-                unsafe {
-                    DestroyWindow(app_ref.hwnd_popup());
-                }
+                let _ = DestroyWindow(app_ref.hwnd_popup());
                 drop(Box::from_raw(app));
             }
+            cancel_retry_timer(hwnd);
             PostQuitMessage(0);
             LRESULT(0)
         }
@@ -265,42 +284,44 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
     match cmd {
         tray::CMD_RESTAURANT_0437 => {
             app.set_restaurant("0437");
-            app.load_cache_for_current();
+            let _ = app.load_cache_for_current();
             app.check_stale_date_and_refresh();
             app.maybe_refresh_on_selection();
         }
         tray::CMD_RESTAURANT_0439 => {
             app.set_restaurant("0439");
-            app.load_cache_for_current();
+            let _ = app.load_cache_for_current();
             app.check_stale_date_and_refresh();
             app.maybe_refresh_on_selection();
         }
         tray::CMD_RESTAURANT_0436 => {
             app.set_restaurant("0436");
-            app.load_cache_for_current();
+            let _ = app.load_cache_for_current();
             app.check_stale_date_and_refresh();
             app.maybe_refresh_on_selection();
         }
         tray::CMD_RESTAURANT_ANTELL_HIGHWAY => {
             app.set_restaurant("antell-highway");
-            app.load_cache_for_current();
+            let _ = app.load_cache_for_current();
             app.check_stale_date_and_refresh();
             app.maybe_refresh_on_selection();
         }
         tray::CMD_RESTAURANT_ANTELL_ROUND => {
             app.set_restaurant("antell-round");
-            app.load_cache_for_current();
+            let _ = app.load_cache_for_current();
             app.check_stale_date_and_refresh();
             app.maybe_refresh_on_selection();
         }
         tray::CMD_LANGUAGE_FI => {
             app.set_language("fi");
-            app.load_cache_for_current();
+            let _ = app.load_cache_for_current();
+            app.check_stale_date_and_refresh();
             app.maybe_refresh_on_selection();
         }
         tray::CMD_LANGUAGE_EN => {
             app.set_language("en");
-            app.load_cache_for_current();
+            let _ = app.load_cache_for_current();
+            app.check_stale_date_and_refresh();
             app.maybe_refresh_on_selection();
         }
         tray::CMD_TOGGLE_SHOW_PRICES => {
@@ -336,7 +357,7 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
         }
         tray::CMD_TOGGLE_ENABLE_ANTELL => {
             app.toggle_enable_antell();
-            app.load_cache_for_current();
+            let _ = app.load_cache_for_current();
             app.check_stale_date_and_refresh();
             app.maybe_refresh_on_selection();
         }
@@ -352,6 +373,9 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
             if let Err(err) = crate::startup::set_enabled(enable) {
                 log_line(&format!("startup toggle failed: {}", err));
             }
+        }
+        tray::CMD_TOGGLE_LOGGING => {
+            app.toggle_logging();
         }
         tray::CMD_REFRESH_NOW => {
             app.start_refresh();
@@ -373,7 +397,7 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
             schedule_refresh_timer(hwnd, 1440);
         }
         tray::CMD_QUIT => unsafe {
-            DestroyWindow(hwnd);
+            let _ = DestroyWindow(hwnd);
         },
         _ => {}
     }
@@ -385,7 +409,7 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
 
 fn schedule_refresh_timer(hwnd: HWND, minutes: u32) {
     unsafe {
-        KillTimer(hwnd, TIMER_REFRESH);
+        let _ = KillTimer(hwnd, TIMER_REFRESH);
         if minutes > 0 {
             let interval = minutes * 60 * 1000;
             let _ = SetTimer(hwnd, TIMER_REFRESH, interval, None);
@@ -401,7 +425,7 @@ pub fn schedule_timers(hwnd: HWND, minutes: u32) {
 
 fn schedule_midnight_timer(hwnd: HWND) {
     unsafe {
-        KillTimer(hwnd, TIMER_MIDNIGHT);
+        let _ = KillTimer(hwnd, TIMER_MIDNIGHT);
         let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
         let date = now.date();
         let next_date = date.next_day().unwrap_or(date);
@@ -414,9 +438,23 @@ fn schedule_midnight_timer(hwnd: HWND) {
 
 fn schedule_stale_timer(hwnd: HWND) {
     unsafe {
-        KillTimer(hwnd, TIMER_STALE_CHECK);
+        let _ = KillTimer(hwnd, TIMER_STALE_CHECK);
         let interval = 4 * 60 * 60 * 1000;
         let _ = SetTimer(hwnd, TIMER_STALE_CHECK, interval, None);
+    }
+}
+
+fn schedule_retry_timer(hwnd: HWND, delay_ms: u32) {
+    unsafe {
+        let _ = KillTimer(hwnd, TIMER_RETRY_FETCH);
+        let _ = SetTimer(hwnd, TIMER_RETRY_FETCH, delay_ms.max(1000), None);
+    }
+    log_line(&format!("scheduled retry in {} ms", delay_ms.max(1000)));
+}
+
+fn cancel_retry_timer(hwnd: HWND) {
+    unsafe {
+        let _ = KillTimer(hwnd, TIMER_RETRY_FETCH);
     }
 }
 

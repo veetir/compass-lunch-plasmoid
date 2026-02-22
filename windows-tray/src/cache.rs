@@ -1,4 +1,5 @@
 use crate::restaurant::{provider_key, Provider};
+use anyhow::Context;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -8,6 +9,24 @@ pub fn cache_dir() -> PathBuf {
 }
 
 pub fn cache_path(provider: Provider, code: &str, language: &str) -> PathBuf {
+    cache_dir().join(cache_filename(provider, code, language))
+}
+
+fn cache_filename(provider: Provider, code: &str, language: &str) -> String {
+    let ext = match provider {
+        Provider::Compass => "json",
+        Provider::Antell => "html",
+    };
+    format!(
+        "{}__{}__{}.{}",
+        sanitize_key_segment(provider_key(provider)),
+        sanitize_key_segment(code),
+        sanitize_key_segment(language),
+        ext
+    )
+}
+
+fn legacy_cache_path(provider: Provider, code: &str, language: &str) -> PathBuf {
     let ext = match provider {
         Provider::Compass => "json",
         Provider::Antell => "html",
@@ -16,14 +35,35 @@ pub fn cache_path(provider: Provider, code: &str, language: &str) -> PathBuf {
     cache_dir().join(filename)
 }
 
+fn sanitize_key_segment(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 pub fn read_cache(provider: Provider, code: &str, language: &str) -> Option<String> {
     let path = cache_path(provider, code, language);
-    fs::read_to_string(path).ok()
+    match fs::read_to_string(&path) {
+        Ok(data) => Some(data),
+        Err(_) => {
+            let legacy_path = legacy_cache_path(provider, code, language);
+            fs::read_to_string(legacy_path).ok()
+        }
+    }
 }
 
 pub fn cache_mtime_ms(provider: Provider, code: &str, language: &str) -> Option<i64> {
     let path = cache_path(provider, code, language);
-    let metadata = fs::metadata(path).ok()?;
+    let metadata = fs::metadata(&path)
+        .or_else(|_| fs::metadata(legacy_cache_path(provider, code, language)))
+        .ok()?;
     let modified = metadata.modified().ok()?;
     let duration = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
     Some(duration.as_millis() as i64)
@@ -31,8 +71,8 @@ pub fn cache_mtime_ms(provider: Provider, code: &str, language: &str) -> Option<
 
 pub fn write_cache(provider: Provider, code: &str, language: &str, payload: &str) -> anyhow::Result<()> {
     let dir = cache_dir();
-    fs::create_dir_all(&dir)?;
+    fs::create_dir_all(&dir).context("create cache dir")?;
     let path = cache_path(provider, code, language);
-    fs::write(path, payload)?;
+    fs::write(&path, payload).with_context(|| format!("write cache file {}", path.display()))?;
     Ok(())
 }

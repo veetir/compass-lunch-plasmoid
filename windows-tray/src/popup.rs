@@ -425,7 +425,12 @@ fn build_lines(state: &AppState) -> Vec<Line> {
 
     if state.status == FetchStatus::Stale {
         lines.push(Line::Spacer);
-        lines.push(Line::Text(text_for(&state.settings.language, "stale")));
+        let stale_key = if state.stale_network_error {
+            "staleNetwork"
+        } else {
+            "stale"
+        };
+        lines.push(Line::Text(text_for(&state.settings.language, stale_key)));
     }
 
     if !state.error_message.is_empty() && state.status != FetchStatus::Ok {

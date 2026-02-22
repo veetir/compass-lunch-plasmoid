@@ -88,8 +88,9 @@ pub fn text_for(language: &str, key: &str) -> String {
     if language == "fi" {
         match key {
             "loading" => "Ladataan ruokalistaa...".to_string(),
-            "noMenu" => "Tälle päivalle ei ole lounaslistaa.".to_string(),
-            "stale" => "Ei verkkoyhteytta. Näytetaan viimeisin tallennettu lista".to_string(),
+            "noMenu" => "Tälle päivälle ei ole lounaslistaa.".to_string(),
+            "stale" => "Päivitys epäonnistui. Näytetään viimeisin tallennettu lista.".to_string(),
+            "staleNetwork" => "Ei verkkoyhteyttä. Näytetään viimeisin tallennettu lista.".to_string(),
             "fetchError" => "Päivitysvirhe".to_string(),
             _ => key.to_string(),
         }
@@ -97,7 +98,8 @@ pub fn text_for(language: &str, key: &str) -> String {
         match key {
             "loading" => "Loading menu...".to_string(),
             "noMenu" => "No lunch menu available for today.".to_string(),
-            "stale" => "Offline. Showing last cached menu".to_string(),
+            "stale" => "Update failed. Showing last cached menu.".to_string(),
+            "staleNetwork" => "Offline. Showing last cached menu.".to_string(),
             "fetchError" => "Fetch error".to_string(),
             _ => key.to_string(),
         }
