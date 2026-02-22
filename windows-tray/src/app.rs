@@ -5,7 +5,7 @@ use crate::model::TodayMenu;
 use crate::restaurant::{
     available_restaurants, is_antell_code, provider_key, restaurant_for_code, Provider,
 };
-use crate::settings::{load_settings, save_settings, Settings};
+use crate::settings::{load_settings, normalize_theme, save_settings, settings_dir, Settings};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use time::OffsetDateTime;
@@ -24,6 +24,7 @@ pub enum FetchStatus {
 pub struct AppState {
     pub settings: Settings,
     pub status: FetchStatus,
+    pub loading_started_epoch_ms: i64,
     pub error_message: String,
     pub stale_network_error: bool,
     pub today_menu: Option<TodayMenu>,
@@ -74,6 +75,7 @@ impl App {
             provider: restaurant_for_code(&settings.restaurant_code, settings.enable_antell_restaurants).provider,
             settings,
             status: FetchStatus::Idle,
+            loading_started_epoch_ms: 0,
             error_message: String::new(),
             stale_network_error: false,
             today_menu: None,
@@ -149,6 +151,7 @@ impl App {
                 Err(err) => {
                     let mut state = self.state.lock().unwrap();
                     state.status = FetchStatus::Error;
+                    state.loading_started_epoch_ms = 0;
                     state.error_message = err.to_string();
                     state.stale_network_error = false;
                     log_line(&format!(
@@ -182,10 +185,12 @@ impl App {
         update_stale_date(&mut state);
         if result.ok {
             state.status = FetchStatus::Ok;
+            state.loading_started_epoch_ms = 0;
             state.error_message.clear();
             state.stale_network_error = false;
         } else {
             state.status = FetchStatus::Error;
+            state.loading_started_epoch_ms = 0;
             state.error_message = result.error_message;
             state.stale_network_error = false;
         }
@@ -222,6 +227,7 @@ impl App {
             let is_current = state.settings.restaurant_code == code;
             if is_current && mark_loading_when_empty && state.raw_payload.is_empty() {
                 state.status = FetchStatus::Loading;
+                state.loading_started_epoch_ms = now_epoch_ms();
             }
             if is_current {
                 state.error_message.clear();
@@ -302,6 +308,7 @@ impl App {
             let mut state = self.state.lock().unwrap();
             if result.ok {
                 state.status = FetchStatus::Ok;
+                state.loading_started_epoch_ms = 0;
                 state.error_message.clear();
                 state.stale_network_error = false;
                 state.raw_payload = result.raw_json.clone();
@@ -331,9 +338,11 @@ impl App {
             } else {
                 if !state.raw_payload.is_empty() {
                     state.status = FetchStatus::Stale;
+                    state.loading_started_epoch_ms = 0;
                     state.stale_network_error = is_probable_network_error(&result.error_message);
                 } else {
                     state.status = FetchStatus::Error;
+                    state.loading_started_epoch_ms = 0;
                     state.stale_network_error = false;
                 }
                 state.error_message = result.error_message.clone();
@@ -361,6 +370,7 @@ impl App {
         state.payload_date.clear();
         state.stale_date = false;
         state.status = FetchStatus::Idle;
+        state.loading_started_epoch_ms = 0;
         state.stale_network_error = false;
     }
 
@@ -373,6 +383,7 @@ impl App {
         state.payload_date.clear();
         state.stale_date = false;
         state.status = FetchStatus::Idle;
+        state.loading_started_epoch_ms = 0;
         state.stale_network_error = false;
     }
 
@@ -451,6 +462,7 @@ impl App {
         state.payload_date.clear();
         state.stale_date = false;
         state.status = FetchStatus::Idle;
+        state.loading_started_epoch_ms = 0;
         state.stale_network_error = false;
     }
 
@@ -480,6 +492,7 @@ impl App {
         state.payload_date.clear();
         state.stale_date = false;
         state.status = FetchStatus::Idle;
+        state.loading_started_epoch_ms = 0;
         state.stale_network_error = false;
     }
 
@@ -492,6 +505,26 @@ impl App {
             return;
         }
         let wide = crate::util::to_wstring(&url);
+        unsafe {
+            windows::Win32::UI::Shell::ShellExecuteW(
+                None,
+                windows::core::PCWSTR(crate::util::to_wstring("open").as_ptr()),
+                windows::core::PCWSTR(wide.as_ptr()),
+                windows::core::PCWSTR::null(),
+                windows::core::PCWSTR::null(),
+                windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
+            );
+        }
+    }
+
+    pub fn open_appdata_dir(&self) {
+        let dir = settings_dir();
+        if let Err(err) = std::fs::create_dir_all(&dir) {
+            log_line(&format!("failed to create appdata dir: {}", err));
+            return;
+        }
+        let path = dir.to_string_lossy().to_string();
+        let wide = crate::util::to_wstring(&path);
         unsafe {
             windows::Win32::UI::Shell::ShellExecuteW(
                 None,
@@ -542,9 +575,9 @@ impl App {
         state.restaurant_name.clone()
     }
 
-    pub fn toggle_dark_mode(&self) {
+    pub fn set_theme(&self, theme: &str) {
         let mut state = self.state.lock().unwrap();
-        state.settings.dark_mode = !state.settings.dark_mode;
+        state.settings.theme = normalize_theme(theme);
         let _ = save_settings(&state.settings);
     }
 

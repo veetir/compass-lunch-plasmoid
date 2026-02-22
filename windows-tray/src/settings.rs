@@ -12,7 +12,7 @@ pub struct Settings {
     pub show_staff_price: bool,
     pub show_guest_price: bool,
     pub hide_expensive_student_meals: bool,
-    pub dark_mode: bool,
+    pub theme: String,
     pub show_allergens: bool,
     pub highlight_gluten_free: bool,
     pub highlight_veg: bool,
@@ -33,7 +33,7 @@ impl Default for Settings {
             show_staff_price: true,
             show_guest_price: false,
             hide_expensive_student_meals: false,
-            dark_mode: true,
+            theme: "dark".to_string(),
             show_allergens: true,
             highlight_gluten_free: false,
             highlight_veg: false,
@@ -80,6 +80,7 @@ struct RawSettings {
     show_staff_price: Option<bool>,
     show_guest_price: Option<bool>,
     hide_expensive_student_meals: Option<bool>,
+    theme: Option<String>,
     dark_mode: Option<bool>,
     show_allergens: Option<bool>,
     hide_allergens: Option<bool>,
@@ -100,6 +101,13 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
             .unwrap_or(defaults.show_allergens)
     });
 
+    let theme = raw
+        .theme
+        .as_deref()
+        .map(normalize_theme)
+        .or_else(|| raw.dark_mode.map(|dark| if dark { "dark".to_string() } else { "light".to_string() }))
+        .unwrap_or_else(|| defaults.theme.clone());
+
     Ok(Settings {
         restaurant_code: raw.restaurant_code.unwrap_or(defaults.restaurant_code),
         language: raw.language.unwrap_or(defaults.language),
@@ -111,7 +119,7 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
         hide_expensive_student_meals: raw
             .hide_expensive_student_meals
             .unwrap_or(defaults.hide_expensive_student_meals),
-        dark_mode: raw.dark_mode.unwrap_or(defaults.dark_mode),
+        theme,
         show_allergens,
         highlight_gluten_free: raw.highlight_gluten_free.unwrap_or(defaults.highlight_gluten_free),
         highlight_veg: raw.highlight_veg.unwrap_or(defaults.highlight_veg),
@@ -126,4 +134,14 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
             .last_updated_epoch_ms
             .unwrap_or(defaults.last_updated_epoch_ms),
     })
+}
+
+pub fn normalize_theme(value: &str) -> String {
+    match value.to_ascii_lowercase().as_str() {
+        "light" => "light".to_string(),
+        "dark" => "dark".to_string(),
+        "blue" => "blue".to_string(),
+        "green" => "green".to_string(),
+        _ => "dark".to_string(),
+    }
 }

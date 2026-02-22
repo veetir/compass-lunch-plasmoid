@@ -88,7 +88,8 @@ pub unsafe extern "system" fn tray_wndproc(
                     if app.is_context_menu_open() {
                         return LRESULT(0);
                     }
-                    if let Some(point) = cursor_point() {
+                    let cursor = cursor_point();
+                    if let Some(point) = cursor {
                         app.set_hover_point(point.x, point.y);
                     }
                     if !popup_is_visible(app.hwnd_popup()) {
@@ -97,8 +98,30 @@ pub unsafe extern "system" fn tray_wndproc(
                             event, event_raw
                         ));
                         let state = app.snapshot();
-                        if let Some(rect) = tray::tray_icon_rect(hwnd) {
-                            popup::show_popup_for_tray_icon(app.hwnd_popup(), &state, rect);
+                        if let Some(cursor_point) = cursor {
+                            if let Some(rect) = tray::tray_icon_rect(hwnd) {
+                                if point_near_rect(&rect, cursor_point.x, cursor_point.y, 12) {
+                                    popup::show_popup_for_tray_icon(app.hwnd_popup(), &state, rect);
+                                } else {
+                                    popup::show_popup_at(
+                                        app.hwnd_popup(),
+                                        &state,
+                                        POINT {
+                                            x: cursor_point.x,
+                                            y: cursor_point.y,
+                                        },
+                                    );
+                                }
+                            } else {
+                                popup::show_popup_at(
+                                    app.hwnd_popup(),
+                                    &state,
+                                    POINT {
+                                        x: cursor_point.x,
+                                        y: cursor_point.y,
+                                    },
+                                );
+                            }
                         } else if let Some((x, y)) = app.hover_point() {
                             popup::show_popup_at(app.hwnd_popup(), &state, POINT { x, y });
                         } else {
@@ -357,8 +380,29 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
             app.check_stale_date_and_refresh();
             app.maybe_refresh_on_selection();
         }
-        tray::CMD_TOGGLE_DARK_MODE => {
-            app.toggle_dark_mode();
+        tray::CMD_THEME_LIGHT => {
+            app.set_theme("light");
+            if popup_is_visible(app.hwnd_popup()) {
+                let state = app.snapshot();
+                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+            }
+        }
+        tray::CMD_THEME_DARK => {
+            app.set_theme("dark");
+            if popup_is_visible(app.hwnd_popup()) {
+                let state = app.snapshot();
+                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+            }
+        }
+        tray::CMD_THEME_BLUE => {
+            app.set_theme("blue");
+            if popup_is_visible(app.hwnd_popup()) {
+                let state = app.snapshot();
+                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+            }
+        }
+        tray::CMD_THEME_GREEN => {
+            app.set_theme("green");
             if popup_is_visible(app.hwnd_popup()) {
                 let state = app.snapshot();
                 popup::resize_popup_keep_position(app.hwnd_popup(), &state);
@@ -372,6 +416,9 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
         }
         tray::CMD_TOGGLE_LOGGING => {
             app.toggle_logging();
+        }
+        tray::CMD_OPEN_APPDATA_DIR => {
+            app.open_appdata_dir();
         }
         tray::CMD_REFRESH_NOW => {
             app.start_refresh();
@@ -494,13 +541,14 @@ fn handle_hover_check(hwnd: HWND, app: &App) {
     let in_popup = unsafe { GetWindowRect(popup_hwnd, &mut rect).is_ok() }
         && point_in_rect(&rect, cursor.x, cursor.y);
 
-    let in_tray = tray::tray_icon_rect(app.hwnd_tray())
-        .map(|rect| point_in_rect(&rect, cursor.x, cursor.y))
-        .unwrap_or_else(|| {
-            app.hover_point()
-                .map(|(x, y)| (cursor.x - x).abs() <= 32 && (cursor.y - y).abs() <= 32)
-                .unwrap_or(false)
-        });
+    let in_tray_rect = tray::tray_icon_rect(app.hwnd_tray())
+        .map(|rect| point_near_rect(&rect, cursor.x, cursor.y, 12))
+        .unwrap_or(false);
+    let in_tray_hover = app
+        .hover_point()
+        .map(|(x, y)| (cursor.x - x).abs() <= 32 && (cursor.y - y).abs() <= 32)
+        .unwrap_or(false);
+    let in_tray = in_tray_rect || in_tray_hover;
 
     if !(in_popup || in_tray) {
         popup::hide_popup(popup_hwnd);
@@ -529,4 +577,11 @@ fn cursor_point() -> Option<POINT> {
 
 fn point_in_rect(rect: &RECT, x: i32, y: i32) -> bool {
     x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+}
+
+fn point_near_rect(rect: &RECT, x: i32, y: i32, padding: i32) -> bool {
+    x >= rect.left - padding
+        && x <= rect.right + padding
+        && y >= rect.top - padding
+        && y <= rect.bottom + padding
 }

@@ -33,9 +33,13 @@ pub const CMD_TOGGLE_SHOW_STAFF_PRICE: u16 = 2207;
 pub const CMD_TOGGLE_SHOW_GUEST_PRICE: u16 = 2208;
 pub const CMD_TOGGLE_HIDE_EXPENSIVE_STUDENT: u16 = 2209;
 pub const CMD_TOGGLE_ENABLE_ANTELL: u16 = 2210;
-pub const CMD_TOGGLE_DARK_MODE: u16 = 2211;
-pub const CMD_TOGGLE_STARTUP: u16 = 2212;
-pub const CMD_TOGGLE_LOGGING: u16 = 2213;
+pub const CMD_THEME_LIGHT: u16 = 2211;
+pub const CMD_THEME_DARK: u16 = 2212;
+pub const CMD_THEME_BLUE: u16 = 2213;
+pub const CMD_THEME_GREEN: u16 = 2214;
+pub const CMD_TOGGLE_STARTUP: u16 = 2215;
+pub const CMD_TOGGLE_LOGGING: u16 = 2216;
+pub const CMD_OPEN_APPDATA_DIR: u16 = 2217;
 pub const CMD_REFRESH_NOW: u16 = 2301;
 pub const CMD_REFRESH_OFF: u16 = 2400;
 pub const CMD_REFRESH_60: u16 = 2401;
@@ -324,11 +328,36 @@ fn build_context_menu(state: &AppState) -> HMENU {
             highlight_menu.0 as usize,
             PCWSTR(to_wstring("Highlight allergens").as_ptr()),
         );
-        append_menu_toggle(
+        let theme_menu = CreatePopupMenu().expect("CreatePopupMenu");
+        append_menu_item(
+            theme_menu,
+            CMD_THEME_LIGHT,
+            "Light",
+            state.settings.theme == "light",
+        );
+        append_menu_item(
+            theme_menu,
+            CMD_THEME_DARK,
+            "Dark",
+            state.settings.theme == "dark",
+        );
+        append_menu_item(
+            theme_menu,
+            CMD_THEME_BLUE,
+            "Blue",
+            state.settings.theme == "blue",
+        );
+        append_menu_item(
+            theme_menu,
+            CMD_THEME_GREEN,
+            "Green",
+            state.settings.theme == "green",
+        );
+        let _ = AppendMenuW(
             menu,
-            CMD_TOGGLE_DARK_MODE,
-            "Dark mode",
-            state.settings.dark_mode,
+            MF_POPUP,
+            theme_menu.0 as usize,
+            PCWSTR(to_wstring("Theme").as_ptr()),
         );
         append_menu_toggle(
             menu,
@@ -342,6 +371,12 @@ fn build_context_menu(state: &AppState) -> HMENU {
             CMD_TOGGLE_LOGGING,
             "Enable logging",
             state.settings.enable_logging,
+        );
+        append_menu_item(
+            developer_menu,
+            CMD_OPEN_APPDATA_DIR,
+            "Open app data folder",
+            false,
         );
         let _ = AppendMenuW(
             menu,

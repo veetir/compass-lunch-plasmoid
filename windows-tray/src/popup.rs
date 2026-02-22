@@ -10,9 +10,9 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, EndPaint, FillRect, GetDeviceCaps,
-    GetMonitorInfoW, GetSysColorBrush, GetTextExtentPoint32W, GetTextMetricsW, InvalidateRect,
-    MonitorFromPoint, SelectObject, SetBkMode, SetTextColor, TextOutW, COLOR_WINDOW, HDC, HFONT,
-    LOGPIXELSY, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, TEXTMETRICW, TRANSPARENT,
+    GetMonitorInfoW, GetTextExtentPoint32W, GetTextMetricsW, InvalidateRect, MonitorFromPoint,
+    SelectObject, SetBkMode, SetTextColor, TextOutW, HDC, HFONT, LOGPIXELSY, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetCursorPos, GetWindowRect, SetWindowPos, ShowWindow, HWND_TOPMOST, SW_HIDE,
@@ -23,6 +23,7 @@ const PADDING_X: i32 = 12;
 const PADDING_Y: i32 = 10;
 const LINE_GAP: i32 = 2;
 const ANCHOR_GAP: i32 = 10;
+const LOADING_HINT_DELAY_MS: i64 = 250;
 
 #[derive(Debug, Clone)]
 enum Line {
@@ -137,19 +138,10 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
 
         let mut rect = RECT::default();
         let _ = GetClientRect(hwnd, &mut rect);
-        let (text_color, suffix_color) = if state.settings.dark_mode {
-            (COLORREF(0x00FFFFFF), COLORREF(0x00B0B0B0))
-        } else {
-            (COLORREF(0x00000000), COLORREF(0x00808080))
-        };
-        if state.settings.dark_mode {
-            let brush = CreateSolidBrush(COLORREF(0x00000000));
-            FillRect(hdc, &rect, brush);
-            DeleteObject(brush);
-        } else {
-            let brush = GetSysColorBrush(COLOR_WINDOW);
-            FillRect(hdc, &rect, brush);
-        }
+        let (bg_color, text_color, suffix_color) = theme_colors(&state.settings.theme);
+        let brush = CreateSolidBrush(bg_color);
+        FillRect(hdc, &rect, brush);
+        DeleteObject(brush);
         SetBkMode(hdc, TRANSPARENT);
 
         let (normal_font, bold_font, small_font, small_bold_font) = create_fonts(hdc);
@@ -401,7 +393,12 @@ fn build_lines(state: &AppState) -> Vec<Line> {
         lines.push(Line::Heading(restaurant));
     }
 
-    if state.today_menu.is_none() && state.status == FetchStatus::Loading {
+    let show_loading_hint = state.status == FetchStatus::Loading
+        && state.today_menu.is_none()
+        && state.loading_started_epoch_ms > 0
+        && now_epoch_ms().saturating_sub(state.loading_started_epoch_ms) >= LOADING_HINT_DELAY_MS;
+
+    if show_loading_hint {
         lines.push(Line::Text(text_for(&state.settings.language, "loading")));
     }
 
@@ -632,6 +629,38 @@ fn build_suffix_segments(
     }
 
     segments
+}
+
+fn now_epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn theme_colors(theme: &str) -> (COLORREF, COLORREF, COLORREF) {
+    match theme {
+        "light" => (
+            COLORREF(0x00FFFFFF),
+            COLORREF(0x00000000),
+            COLORREF(0x00808080),
+        ),
+        "blue" => (
+            COLORREF(0x00562401),
+            COLORREF(0x00FFFFFF),
+            COLORREF(0x00E7C7A7),
+        ),
+        "green" => (
+            COLORREF(0x00000000),
+            COLORREF(0x0000D000),
+            COLORREF(0x00009000),
+        ),
+        _ => (
+            COLORREF(0x00000000),
+            COLORREF(0x00FFFFFF),
+            COLORREF(0x00B0B0B0),
+        ),
+    }
 }
 
 fn is_visible(hwnd: HWND) -> bool {
