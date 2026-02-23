@@ -4,23 +4,25 @@ use crate::util::to_wstring;
 use std::path::{Path, PathBuf};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
+use windows::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconGetRect, Shell_NotifyIconW, NOTIFYICONDATAW, NOTIFYICONIDENTIFIER, NIF_ICON,
-    NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_SETVERSION, NOTIFYICON_VERSION_4,
+    Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD,
+    NIM_DELETE, NIM_SETVERSION, NOTIFYICONDATAW, NOTIFYICONIDENTIFIER, NOTIFYICON_VERSION_4,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, GetCursorPos, LoadIconW, LoadImageW, PostMessageW,
-    SetForegroundWindow, TrackPopupMenu, HICON, HMENU, IMAGE_ICON, LR_DEFAULTSIZE,
-    LR_LOADFROMFILE, MF_CHECKED, MF_DISABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
-    TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_NULL,
+    SetForegroundWindow, TrackPopupMenu, HICON, HMENU, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE,
+    MF_CHECKED, MF_DISABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, TPM_LEFTALIGN,
+    TPM_RIGHTBUTTON, WM_NULL,
 };
-use windows::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
 
 pub const CMD_RESTAURANT_0437: u16 = 2001;
 pub const CMD_RESTAURANT_0439: u16 = 2002;
 pub const CMD_RESTAURANT_0436: u16 = 2003;
-pub const CMD_RESTAURANT_ANTELL_HIGHWAY: u16 = 2004;
-pub const CMD_RESTAURANT_ANTELL_ROUND: u16 = 2005;
+pub const CMD_RESTAURANT_SNELLARI_RSS: u16 = 2004;
+pub const CMD_RESTAURANT_HUOMEN_BIOTEKNIA: u16 = 2005;
+pub const CMD_RESTAURANT_ANTELL_HIGHWAY: u16 = 2006;
+pub const CMD_RESTAURANT_ANTELL_ROUND: u16 = 2007;
 pub const CMD_LANGUAGE_FI: u16 = 2101;
 pub const CMD_LANGUAGE_EN: u16 = 2102;
 pub const CMD_TOGGLE_SHOW_PRICES: u16 = 2201;
@@ -32,7 +34,6 @@ pub const CMD_TOGGLE_SHOW_STUDENT_PRICE: u16 = 2206;
 pub const CMD_TOGGLE_SHOW_STAFF_PRICE: u16 = 2207;
 pub const CMD_TOGGLE_SHOW_GUEST_PRICE: u16 = 2208;
 pub const CMD_TOGGLE_HIDE_EXPENSIVE_STUDENT: u16 = 2209;
-pub const CMD_TOGGLE_ENABLE_ANTELL: u16 = 2210;
 pub const CMD_THEME_LIGHT: u16 = 2211;
 pub const CMD_THEME_DARK: u16 = 2212;
 pub const CMD_THEME_BLUE: u16 = 2213;
@@ -152,8 +153,17 @@ fn find_icon_path() -> Option<PathBuf> {
     let candidates = [
         exe_dir.join("assets").join("icon.ico"),
         exe_dir.join("..").join("assets").join("icon.ico"),
-        exe_dir.join("..").join("..").join("assets").join("icon.ico"),
-        exe_dir.join("..").join("..").join("..").join("assets").join("icon.ico"),
+        exe_dir
+            .join("..")
+            .join("..")
+            .join("assets")
+            .join("icon.ico"),
+        exe_dir
+            .join("..")
+            .join("..")
+            .join("..")
+            .join("assets")
+            .join("icon.ico"),
     ];
 
     for candidate in candidates {
@@ -197,9 +207,9 @@ fn build_context_menu(state: &AppState) -> HMENU {
         );
         append_menu_item(
             restaurant_menu,
-            CMD_RESTAURANT_0439,
-            "Tietoteknia",
-            state.settings.restaurant_code == "0439",
+            CMD_RESTAURANT_SNELLARI_RSS,
+            "Snellari",
+            state.settings.restaurant_code == "snellari-rss",
         );
         append_menu_item(
             restaurant_menu,
@@ -207,20 +217,30 @@ fn build_context_menu(state: &AppState) -> HMENU {
             "Canthia",
             state.settings.restaurant_code == "0436",
         );
-        if state.settings.enable_antell_restaurants {
-            append_menu_item(
-                restaurant_menu,
-                CMD_RESTAURANT_ANTELL_HIGHWAY,
-                "Antell Highway",
-                state.settings.restaurant_code == "antell-highway",
-            );
-            append_menu_item(
-                restaurant_menu,
-                CMD_RESTAURANT_ANTELL_ROUND,
-                "Antell Round",
-                state.settings.restaurant_code == "antell-round",
-            );
-        }
+        append_menu_item(
+            restaurant_menu,
+            CMD_RESTAURANT_0439,
+            "Tietoteknia",
+            state.settings.restaurant_code == "0439",
+        );
+        append_menu_item(
+            restaurant_menu,
+            CMD_RESTAURANT_HUOMEN_BIOTEKNIA,
+            "Hyvä Huomen",
+            state.settings.restaurant_code == "huomen-bioteknia",
+        );
+        append_menu_item(
+            restaurant_menu,
+            CMD_RESTAURANT_ANTELL_ROUND,
+            "Antell Round",
+            state.settings.restaurant_code == "antell-round",
+        );
+        append_menu_item(
+            restaurant_menu,
+            CMD_RESTAURANT_ANTELL_HIGHWAY,
+            "Antell Highway",
+            state.settings.restaurant_code == "antell-highway",
+        );
         let _ = AppendMenuW(
             menu,
             MF_POPUP,
@@ -249,13 +269,6 @@ fn build_context_menu(state: &AppState) -> HMENU {
         );
 
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-
-        append_menu_toggle(
-            menu,
-            CMD_TOGGLE_ENABLE_ANTELL,
-            "Enable Antell restaurants",
-            state.settings.enable_antell_restaurants,
-        );
 
         append_menu_toggle(
             menu,
@@ -430,14 +443,22 @@ fn build_context_menu(state: &AppState) -> HMENU {
 
 fn append_menu_item(menu: HMENU, id: u16, label: &str, checked: bool) {
     unsafe {
-        let flags = if checked { MF_STRING | MF_CHECKED } else { MF_STRING };
+        let flags = if checked {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
         let _ = AppendMenuW(menu, flags, id as usize, PCWSTR(to_wstring(label).as_ptr()));
     }
 }
 
 fn append_menu_toggle(menu: HMENU, id: u16, label: &str, enabled: bool) {
     unsafe {
-        let flags = if enabled { MF_STRING | MF_CHECKED } else { MF_STRING };
+        let flags = if enabled {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
         let _ = AppendMenuW(menu, flags, id as usize, PCWSTR(to_wstring(label).as_ptr()));
     }
 }

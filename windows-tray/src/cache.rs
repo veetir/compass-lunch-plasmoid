@@ -15,7 +15,9 @@ pub fn cache_path(provider: Provider, code: &str, language: &str) -> PathBuf {
 fn cache_filename(provider: Provider, code: &str, language: &str) -> String {
     let ext = match provider {
         Provider::Compass => "json",
+        Provider::CompassRss => "xml",
         Provider::Antell => "html",
+        Provider::HuomenJson => "json",
     };
     format!(
         "{}__{}__{}.{}",
@@ -29,7 +31,9 @@ fn cache_filename(provider: Provider, code: &str, language: &str) -> String {
 fn legacy_cache_path(provider: Provider, code: &str, language: &str) -> PathBuf {
     let ext = match provider {
         Provider::Compass => "json",
+        Provider::CompassRss => "xml",
         Provider::Antell => "html",
+        Provider::HuomenJson => "json",
     };
     let filename = format!("{}|{}|{}.{}", provider_key(provider), code, language, ext);
     cache_dir().join(filename)
@@ -69,7 +73,12 @@ pub fn cache_mtime_ms(provider: Provider, code: &str, language: &str) -> Option<
     Some(duration.as_millis() as i64)
 }
 
-pub fn write_cache(provider: Provider, code: &str, language: &str, payload: &str) -> anyhow::Result<()> {
+pub fn write_cache(
+    provider: Provider,
+    code: &str,
+    language: &str,
+    payload: &str,
+) -> anyhow::Result<()> {
     let dir = cache_dir();
     fs::create_dir_all(&dir).context("create cache dir")?;
     let path = cache_path(provider, code, language);

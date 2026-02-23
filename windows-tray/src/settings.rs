@@ -87,7 +87,6 @@ struct RawSettings {
     highlight_gluten_free: Option<bool>,
     highlight_veg: Option<bool>,
     highlight_lactose_free: Option<bool>,
-    enable_antell_restaurants: Option<bool>,
     enable_logging: Option<bool>,
     last_updated_epoch_ms: Option<i64>,
 }
@@ -126,9 +125,8 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
         highlight_lactose_free: raw
             .highlight_lactose_free
             .unwrap_or(defaults.highlight_lactose_free),
-        enable_antell_restaurants: raw
-            .enable_antell_restaurants
-            .unwrap_or(defaults.enable_antell_restaurants),
+        // Antell is always enabled; keep the field for backward-compatible settings serialization.
+        enable_antell_restaurants: true,
         enable_logging: raw.enable_logging.unwrap_or(defaults.enable_logging),
         last_updated_epoch_ms: raw
             .last_updated_epoch_ms

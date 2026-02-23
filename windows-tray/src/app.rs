@@ -3,7 +3,7 @@ use crate::cache;
 use crate::log::{log_line, set_enabled as set_log_enabled};
 use crate::model::TodayMenu;
 use crate::restaurant::{
-    available_restaurants, is_antell_code, provider_key, restaurant_for_code, Provider,
+    available_restaurants, provider_key, restaurant_for_code, Provider,
 };
 use crate::settings::{load_settings, normalize_theme, save_settings, settings_dir, Settings};
 use std::collections::HashSet;
@@ -133,7 +133,7 @@ impl App {
             None
         };
         if let Some(raw) = cache::read_cache(restaurant.provider, restaurant.code, &language) {
-            match api::parse_cached_payload(&raw, restaurant.provider, restaurant) {
+            match api::parse_cached_payload(&raw, restaurant.provider, restaurant, &language) {
                 Ok(result) => {
                     let mut result = result;
                     if let Some(date_key) = cached_date {
@@ -440,30 +440,6 @@ impl App {
         state.settings.hide_expensive_student_meals =
             !state.settings.hide_expensive_student_meals;
         let _ = save_settings(&state.settings);
-    }
-
-    pub fn toggle_enable_antell(&self) {
-        let mut state = self.state.lock().unwrap();
-        let enabled = !state.settings.enable_antell_restaurants;
-        state.settings.enable_antell_restaurants = enabled;
-        if !enabled && is_antell_code(&state.settings.restaurant_code) {
-            let fallback = restaurant_for_code("0437", false);
-            state.settings.restaurant_code = fallback.code.to_string();
-        }
-        let restaurant = restaurant_for_code(
-            &state.settings.restaurant_code,
-            state.settings.enable_antell_restaurants,
-        );
-        state.provider = restaurant.provider;
-        state.restaurant_url = restaurant.url.unwrap_or_default().to_string();
-        let _ = save_settings(&state.settings);
-        state.raw_payload.clear();
-        state.today_menu = None;
-        state.payload_date.clear();
-        state.stale_date = false;
-        state.status = FetchStatus::Idle;
-        state.loading_started_epoch_ms = 0;
-        state.stale_network_error = false;
     }
 
     pub fn set_refresh_minutes(&self, minutes: u32) {

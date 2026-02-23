@@ -10,8 +10,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowLongPtrW, GetWindowRect, KillTimer,
     LoadCursorW, PostQuitMessage, RegisterClassExW, SetTimer, SetWindowLongPtrW, CREATESTRUCTW,
     CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW, WM_ACTIVATE, WM_APP, WM_COMMAND,
-    WM_DESTROY, WM_KEYDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE,
-    WM_PAINT, WM_RBUTTONUP, WM_TIMER, WM_CONTEXTMENU, WNDCLASSEXW,
+    WM_CONTEXTMENU, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_RBUTTONUP, WM_TIMER, WNDCLASSEXW,
 };
 
 pub const TRAY_WND_CLASS: &str = "CompassLunchTrayWindow";
@@ -26,7 +26,9 @@ pub const TIMER_HOVER_CHECK: usize = 3;
 pub const TIMER_STALE_CHECK: usize = 4;
 pub const TIMER_RETRY_FETCH: usize = 5;
 
-pub fn register_window_classes(hinstance: windows::Win32::Foundation::HINSTANCE) -> anyhow::Result<()> {
+pub fn register_window_classes(
+    hinstance: windows::Win32::Foundation::HINSTANCE,
+) -> anyhow::Result<()> {
     unsafe {
         let tray_class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
@@ -229,7 +231,8 @@ pub unsafe extern "system" fn tray_wndproc(
                             popup::resize_popup_keep_position(app.hwnd_popup(), &state);
                         }
                     }
-                    FetchApplyOutcome::BackgroundSuccess | FetchApplyOutcome::BackgroundFailure => {}
+                    FetchApplyOutcome::BackgroundSuccess | FetchApplyOutcome::BackgroundFailure => {
+                    }
                 }
             }
             LRESULT(0)
@@ -307,6 +310,12 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
             app.check_stale_date_and_refresh();
             app.maybe_refresh_on_selection();
         }
+        tray::CMD_RESTAURANT_SNELLARI_RSS => {
+            app.set_restaurant("snellari-rss");
+            let _ = app.load_cache_for_current();
+            app.check_stale_date_and_refresh();
+            app.maybe_refresh_on_selection();
+        }
         tray::CMD_RESTAURANT_0439 => {
             app.set_restaurant("0439");
             let _ = app.load_cache_for_current();
@@ -315,6 +324,12 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
         }
         tray::CMD_RESTAURANT_0436 => {
             app.set_restaurant("0436");
+            let _ = app.load_cache_for_current();
+            app.check_stale_date_and_refresh();
+            app.maybe_refresh_on_selection();
+        }
+        tray::CMD_RESTAURANT_HUOMEN_BIOTEKNIA => {
+            app.set_restaurant("huomen-bioteknia");
             let _ = app.load_cache_for_current();
             app.check_stale_date_and_refresh();
             app.maybe_refresh_on_selection();
@@ -373,12 +388,6 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
         }
         tray::CMD_TOGGLE_HIDE_EXPENSIVE_STUDENT => {
             app.toggle_hide_expensive_student_meals();
-        }
-        tray::CMD_TOGGLE_ENABLE_ANTELL => {
-            app.toggle_enable_antell();
-            let _ = app.load_cache_for_current();
-            app.check_stale_date_and_refresh();
-            app.maybe_refresh_on_selection();
         }
         tray::CMD_THEME_LIGHT => {
             app.set_theme("light");
