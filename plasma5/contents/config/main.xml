@@ -37,8 +37,8 @@
     <entry name="iconName" type="String">
       <default>food</default>
     </entry>
-    <entry name="enableAntellRestaurants" type="Bool">
-      <default>false</default>
+    <entry name="enabledRestaurantCodes" type="String">
+      <default>0437,snellari-rss,0436,0439,antell-round,antell-highway,huomen-bioteknia</default>
     </entry>
     <entry name="showAllergens" type="Bool">
       <default>true</default>

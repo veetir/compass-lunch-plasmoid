@@ -11,18 +11,16 @@ Item {
 
     property string apiBaseUrl: "https://www.compass-group.fi/menuapi/feed/json"
     property string apiRssBaseUrl: "https://www.compass-group.fi/menuapi/feed/rss/current-day"
-    property var baseRestaurantCatalog: [
+    property var allRestaurantCatalog: [
         { code: "0437", fallbackName: "Snellmania", provider: "compass" },
-        { code: "0439", fallbackName: "Tietoteknia", provider: "compass" },
-        { code: "0436", fallbackName: "Canthia", provider: "compass" },
         { code: "snellari-rss", fallbackName: "Cafe Snellari", provider: "compass-rss", rssCostNumber: "4370", rssUrlBase: "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/cafe-snellari/" },
+        { code: "0436", fallbackName: "Canthia", provider: "compass" },
+        { code: "0439", fallbackName: "Tietoteknia", provider: "compass" },
+        { code: "antell-round", fallbackName: "Antell Round", provider: "antell", antellSlug: "round", antellUrlBase: "https://antell.fi/lounas/kuopio/round/" },
+        { code: "antell-highway", fallbackName: "Antell Highway", provider: "antell", antellSlug: "highway", antellUrlBase: "https://antell.fi/lounas/kuopio/highway/" },
         { code: "huomen-bioteknia", fallbackName: "Hyvä Huomen Bioteknia", provider: "huomen-json", huomenApiBase: "https://europe-west1-luncher-7cf76.cloudfunctions.net/api/v1/week/a96b7ccf-2c3d-432a-8504-971dbb6d55d3/active", huomenUrlBase: "https://hyvahuomen.fi/bioteknia/" }
     ]
-    property var antellRestaurantCatalog: [
-        { code: "antell-highway", fallbackName: "Antell Highway", provider: "antell", antellSlug: "highway", antellUrlBase: "https://antell.fi/lounas/kuopio/highway/" },
-        { code: "antell-round", fallbackName: "Antell Round", provider: "antell", antellSlug: "round", antellUrlBase: "https://antell.fi/lounas/kuopio/round/" }
-    ]
-    property var restaurantCatalog: configEnableAntellRestaurants ? baseRestaurantCatalog.concat(antellRestaurantCatalog) : baseRestaurantCatalog
+    property var restaurantCatalog: filteredRestaurantCatalog(configEnabledRestaurantCodes)
 
     property var restaurantStates: ({})
     property var requestSerialByCode: ({})
@@ -33,15 +31,27 @@ Item {
 
     property string activeRestaurantCode: "0437"
 
+    property string configEnabledRestaurantCodes: {
+        var raw = String(plasmoid.configuration.enabledRestaurantCodes || "").trim()
+        if (raw.length > 0) {
+            return raw
+        }
+
+        var defaults = []
+        for (var i = 0; i < allRestaurantCatalog.length; i++) {
+            defaults.push(String(allRestaurantCatalog[i].code))
+        }
+        return defaults.join(",")
+    }
     property string configRestaurantCode: {
-        var raw = String(plasmoid.configuration.restaurantCode || plasmoid.configuration.costNumber || "0437").trim()
-        return isKnownRestaurant(raw) ? raw : "0437"
+        var fallback = defaultRestaurantCode()
+        var raw = String(plasmoid.configuration.restaurantCode || plasmoid.configuration.costNumber || fallback).trim()
+        return isKnownRestaurant(raw) ? raw : fallback
     }
     property string configLanguage: {
         var raw = String(plasmoid.configuration.language || "fi").toLowerCase()
         return raw === "en" ? "en" : "fi"
     }
-    property bool configEnableAntellRestaurants: !!plasmoid.configuration.enableAntellRestaurants
     property bool configEnableWheelCycle: plasmoid.configuration.enableWheelCycle !== false
     property int configRefreshMinutes: {
         var raw = Number(plasmoid.configuration.refreshMinutes)
@@ -76,6 +86,63 @@ Item {
 
     function touchModel() {
         modelVersion += 1
+    }
+
+    function parseConfiguredRestaurantCodes(rawValue) {
+        var selectedMap = {}
+        var raw = String(rawValue || "")
+        if (raw.length > 0) {
+            var tokens = raw.split(",")
+            for (var i = 0; i < tokens.length; i++) {
+                var token = String(tokens[i] || "").trim()
+                if (token) {
+                    selectedMap[token] = true
+                }
+            }
+        } else {
+            for (var j = 0; j < allRestaurantCatalog.length; j++) {
+                selectedMap[String(allRestaurantCatalog[j].code)] = true
+            }
+        }
+
+        var selectedCodes = []
+        for (var k = 0; k < allRestaurantCatalog.length; k++) {
+            var code = String(allRestaurantCatalog[k].code)
+            if (selectedMap[code]) {
+                selectedCodes.push(code)
+            }
+        }
+
+        if (selectedCodes.length === 0 && allRestaurantCatalog.length > 0) {
+            selectedCodes.push(String(allRestaurantCatalog[0].code))
+        }
+
+        return selectedCodes
+    }
+
+    function filteredRestaurantCatalog(rawValue) {
+        var selectedCodes = parseConfiguredRestaurantCodes(rawValue)
+        var selectedMap = {}
+        for (var i = 0; i < selectedCodes.length; i++) {
+            selectedMap[selectedCodes[i]] = true
+        }
+
+        var filtered = []
+        for (var j = 0; j < allRestaurantCatalog.length; j++) {
+            var entry = allRestaurantCatalog[j]
+            if (selectedMap[String(entry.code)]) {
+                filtered.push(entry)
+            }
+        }
+        return filtered
+    }
+
+    function defaultRestaurantCode() {
+        var codes = restaurantCodes()
+        if (codes.length > 0) {
+            return String(codes[0])
+        }
+        return allRestaurantCatalog.length > 0 ? String(allRestaurantCatalog[0].code) : "0437"
     }
 
     function restaurantCodes() {
@@ -1348,7 +1415,7 @@ Item {
         syncSettingsLastUpdatedDisplay()
     }
 
-    onConfigEnableAntellRestaurantsChanged: {
+    onConfigEnabledRestaurantCodesChanged: {
         resetAllStates()
         activeRestaurantCode = configRestaurantCode
         loadCacheStore()

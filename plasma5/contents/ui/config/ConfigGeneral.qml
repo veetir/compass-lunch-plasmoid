@@ -6,6 +6,7 @@ Item {
     id: page
 
     property string cfg_restaurantCode: "0437"
+    property string cfg_enabledRestaurantCodes: "0437,snellari-rss,0436,0439,antell-round,antell-highway,huomen-bioteknia"
     property alias cfg_refreshMinutes: refreshSpin.value
     property int cfg_manualRefreshToken: 0
     property alias cfg_showPrices: showPricesCheck.checked
@@ -14,7 +15,6 @@ Item {
     property alias cfg_showStaffPrice: showStaffPriceCheck.checked
     property alias cfg_showGuestPrice: showGuestPriceCheck.checked
     property string cfg_iconName: "food"
-    property alias cfg_enableAntellRestaurants: antellRestaurantsCheck.checked
     property alias cfg_showAllergens: showAllergensCheck.checked
     property alias cfg_highlightGlutenFree: highlightGlutenFreeCheck.checked
     property alias cfg_highlightVeg: highlightVegCheck.checked
@@ -22,20 +22,96 @@ Item {
     property alias cfg_enableWheelCycle: wheelCycleCheck.checked
     property string cfg_lastUpdatedDisplay: ""
     property string cfg_language: "fi"
-    property var baseRestaurantOptions: [
-        { code: "0437", label: "Ita-Suomen yliopisto/Snellmania (0437)" },
-        { code: "0439", label: "Tietoteknia (0439)" },
-        { code: "0436", label: "Ita-Suomen yliopisto/Canthia (0436)" },
-        { code: "snellari-rss", label: "Cafe Snellari (RSS)" },
-        { code: "huomen-bioteknia", label: "Hyvä Huomen Bioteknia (JSON)" }
-    ]
-    property var antellRestaurantOptions: [
-        { code: "antell-highway", label: "Antell Highway" },
-        { code: "antell-round", label: "Antell Round" }
+
+    property var allRestaurantOptions: [
+        { code: "0437", label: "Ita-Suomen yliopisto/Snellmania (0437)", shortLabel: "Snellmania" },
+        { code: "snellari-rss", label: "Cafe Snellari (RSS)", shortLabel: "Snellari" },
+        { code: "0436", label: "Ita-Suomen yliopisto/Canthia (0436)", shortLabel: "Canthia" },
+        { code: "0439", label: "Tietoteknia (0439)", shortLabel: "Tietoteknia" },
+        { code: "antell-round", label: "Antell Round", shortLabel: "Round" },
+        { code: "antell-highway", label: "Antell Highway", shortLabel: "Highway" },
+        { code: "huomen-bioteknia", label: "Hyvä Huomen Bioteknia (JSON)", shortLabel: "Hyvä Huomen" }
     ]
 
+    function defaultRestaurantCode() {
+        return allRestaurantOptions.length > 0 ? allRestaurantOptions[0].code : "0437"
+    }
+
+    function canonicalizeCodes(codes) {
+        var selectedMap = {}
+        var selectedList = Array.isArray(codes) ? codes : []
+
+        for (var i = 0; i < selectedList.length; i++) {
+            var code = String(selectedList[i] || "").trim()
+            if (code.length > 0) {
+                selectedMap[code] = true
+            }
+        }
+
+        var canonical = []
+        for (var j = 0; j < allRestaurantOptions.length; j++) {
+            var optionCode = allRestaurantOptions[j].code
+            if (selectedMap[optionCode]) {
+                canonical.push(optionCode)
+            }
+        }
+
+        if (canonical.length === 0 && allRestaurantOptions.length > 0) {
+            canonical.push(defaultRestaurantCode())
+        }
+
+        return canonical
+    }
+
+    function parseEnabledCodes(rawValue) {
+        var raw = String(rawValue || "").trim()
+        if (!raw) {
+            var allCodes = []
+            for (var i = 0; i < allRestaurantOptions.length; i++) {
+                allCodes.push(allRestaurantOptions[i].code)
+            }
+            return canonicalizeCodes(allCodes)
+        }
+
+        return canonicalizeCodes(raw.split(","))
+    }
+
+    function enabledCodesList() {
+        return parseEnabledCodes(cfg_enabledRestaurantCodes)
+    }
+
+    function setEnabledCodes(codes) {
+        var canonical = canonicalizeCodes(codes)
+        if (canonical.indexOf(cfg_restaurantCode) < 0) {
+            canonical.push(cfg_restaurantCode)
+            canonical = canonicalizeCodes(canonical)
+        }
+        cfg_enabledRestaurantCodes = canonical.join(",")
+    }
+
+    function optionEnabled(code) {
+        return enabledCodesList().indexOf(code) >= 0
+    }
+
     function availableRestaurantOptions() {
-        return cfg_enableAntellRestaurants ? baseRestaurantOptions.concat(antellRestaurantOptions) : baseRestaurantOptions
+        var selected = enabledCodesList()
+        var selectedMap = {}
+        for (var i = 0; i < selected.length; i++) {
+            selectedMap[selected[i]] = true
+        }
+
+        var options = []
+        for (var j = 0; j < allRestaurantOptions.length; j++) {
+            if (selectedMap[allRestaurantOptions[j].code]) {
+                options.push(allRestaurantOptions[j])
+            }
+        }
+
+        if (options.length === 0 && allRestaurantOptions.length > 0) {
+            options.push(allRestaurantOptions[0])
+        }
+
+        return options
     }
 
     function restaurantIndexForCode(code) {
@@ -48,16 +124,56 @@ Item {
         return 0
     }
 
+    function ensureFavoriteInCycle() {
+        var selected = enabledCodesList()
+        if (selected.indexOf(cfg_restaurantCode) < 0) {
+            selected.push(cfg_restaurantCode)
+            cfg_enabledRestaurantCodes = canonicalizeCodes(selected).join(",")
+        }
+    }
+
     function syncRestaurantCombo() {
-        var model = restaurantCombo.model
+        ensureFavoriteInCycle()
+
+        var model = availableRestaurantOptions()
+        restaurantCombo.model = model
         if (!model || model.length === 0) {
             return
         }
+
         var idx = restaurantIndexForCode(cfg_restaurantCode)
         if (restaurantCombo.currentIndex !== idx) {
             restaurantCombo.currentIndex = idx
         }
+
+        if (restaurantCombo.currentIndex < 0 || restaurantCombo.currentIndex >= model.length) {
+            restaurantCombo.currentIndex = 0
+        }
+
         cfg_restaurantCode = model[restaurantCombo.currentIndex].code
+    }
+
+    function toggleRestaurantEnabled(code, checked) {
+        var selected = enabledCodesList()
+        var idx = selected.indexOf(code)
+
+        if (code === cfg_restaurantCode) {
+            setEnabledCodes(selected)
+            return
+        }
+
+        if (checked) {
+            if (idx < 0) {
+                selected.push(code)
+            }
+        } else {
+            if (idx >= 0) {
+                selected.splice(idx, 1)
+            }
+        }
+
+        setEnabledCodes(selected)
+        syncRestaurantCombo()
     }
 
     function syncLanguageCombo() {
@@ -91,10 +207,13 @@ Item {
         }
     }
 
-    onCfg_restaurantCodeChanged: syncRestaurantCombo()
+    onCfg_restaurantCodeChanged: {
+        ensureFavoriteInCycle()
+        syncRestaurantCombo()
+    }
+    onCfg_enabledRestaurantCodesChanged: syncRestaurantCombo()
     onCfg_languageChanged: syncLanguageCombo()
     onCfg_iconNameChanged: syncIconCombo()
-    onCfg_enableAntellRestaurantsChanged: syncRestaurantCombo()
 
     ColumnLayout {
         anchors.fill: parent
@@ -111,11 +230,34 @@ Item {
             textRole: "label"
             model: page.availableRestaurantOptions()
             onCurrentIndexChanged: {
-                if (currentIndex >= 0) {
+                if (currentIndex >= 0 && model && currentIndex < model.length) {
                     cfg_restaurantCode = model[currentIndex].code
+                    ensureFavoriteInCycle()
                 }
             }
             Component.onCompleted: page.syncRestaurantCombo()
+        }
+
+        QQC2.Label {
+            text: "Restaurants in cycle"
+        }
+
+        GridLayout {
+            Layout.fillWidth: true
+            columns: 3
+            columnSpacing: 10
+            rowSpacing: 4
+
+            Repeater {
+                model: page.allRestaurantOptions
+
+                QQC2.CheckBox {
+                    text: modelData.shortLabel
+                    checked: page.optionEnabled(modelData.code)
+                    enabled: modelData.code !== page.cfg_restaurantCode
+                    onClicked: page.toggleRestaurantEnabled(modelData.code, checked)
+                }
+            }
         }
 
         QQC2.Label {
@@ -175,11 +317,6 @@ Item {
                 id: showGuestPriceCheck
                 text: "Guest"
             }
-        }
-
-        QQC2.CheckBox {
-            id: antellRestaurantsCheck
-            text: "Enable Antell restaurants"
         }
 
         RowLayout {
