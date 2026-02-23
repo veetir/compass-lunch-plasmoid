@@ -93,7 +93,8 @@ pub unsafe extern "system" fn tray_wndproc(
                     let popup_hwnd = app.hwnd_popup();
                     if popup_is_visible(popup_hwnd) {
                         app.persist_settings();
-                        popup::hide_popup(popup_hwnd);
+                        let state = app.snapshot();
+                        popup::begin_close_animation(popup_hwnd, &state);
                     } else {
                         let state = app.snapshot();
                         if let Some(rect) = tray::tray_icon_rect(hwnd) {
@@ -110,9 +111,9 @@ pub unsafe extern "system" fn tray_wndproc(
                 WM_CONTEXTMENU => {
                     log_line("tray context menu");
                     app.persist_settings();
-                    popup::hide_popup(app.hwnd_popup());
-                    app.set_context_menu_open(true);
                     let state = app.snapshot();
+                    popup::begin_close_animation(app.hwnd_popup(), &state);
+                    app.set_context_menu_open(true);
                     tray::show_context_menu(hwnd, &state);
                     app.set_context_menu_open(false);
                 }
@@ -244,8 +245,11 @@ pub unsafe extern "system" fn popup_wndproc(
                 if !app.is_null() {
                     let app = &*(app);
                     app.persist_settings();
+                    let state = app.snapshot();
+                    popup::begin_close_animation(hwnd, &state);
+                } else {
+                    popup::hide_popup(hwnd);
                 }
-                popup::hide_popup(hwnd);
             }
             LRESULT(0)
         }
@@ -259,23 +263,14 @@ pub unsafe extern "system" fn popup_wndproc(
             match key {
                 0x1B => {
                     app.persist_settings();
-                    popup::hide_popup(hwnd);
+                    let state = app.snapshot();
+                    popup::begin_close_animation(hwnd, &state);
                 }
                 0x25 | 0x41 => {
-                    app.cycle_restaurant(-1);
-                    let _ = app.load_cache_for_current();
-                    app.check_stale_date_and_refresh();
-                    app.maybe_refresh_on_selection();
-                    let state = app.snapshot();
-                    popup::resize_popup_keep_position(hwnd, &state);
+                    cycle_popup_restaurant(hwnd, app, -1);
                 }
                 0x27 | 0x44 => {
-                    app.cycle_restaurant(1);
-                    let _ = app.load_cache_for_current();
-                    app.check_stale_date_and_refresh();
-                    app.maybe_refresh_on_selection();
-                    let state = app.snapshot();
-                    popup::resize_popup_keep_position(hwnd, &state);
+                    cycle_popup_restaurant(hwnd, app, 1);
                 }
                 _ => {}
             }
@@ -292,25 +287,18 @@ pub unsafe extern "system" fn popup_wndproc(
             if let Some(action) = popup::header_button_at(hwnd, x, y) {
                 match action {
                     popup::HeaderButtonAction::Prev => {
-                        app.cycle_restaurant(-1);
-                        let _ = app.load_cache_for_current();
-                        app.check_stale_date_and_refresh();
-                        app.maybe_refresh_on_selection();
+                        cycle_popup_restaurant(hwnd, app, -1);
                     }
                     popup::HeaderButtonAction::Next => {
-                        app.cycle_restaurant(1);
-                        let _ = app.load_cache_for_current();
-                        app.check_stale_date_and_refresh();
-                        app.maybe_refresh_on_selection();
+                        cycle_popup_restaurant(hwnd, app, 1);
                     }
                     popup::HeaderButtonAction::Close => {
                         app.persist_settings();
-                        popup::hide_popup(hwnd);
+                        let state = app.snapshot();
+                        popup::begin_close_animation(hwnd, &state);
                         return LRESULT(0);
                     }
                 }
-                let state = app.snapshot();
-                popup::resize_popup_keep_position(hwnd, &state);
             }
             LRESULT(0)
         }
@@ -319,7 +307,8 @@ pub unsafe extern "system" fn popup_wndproc(
             if !app.is_null() {
                 let app = &*(app);
                 app.persist_settings();
-                popup::hide_popup(hwnd);
+                let state = app.snapshot();
+                popup::begin_close_animation(hwnd, &state);
                 let state = app.snapshot();
                 tray::show_context_menu(app.hwnd_tray(), &state);
             }
@@ -333,22 +322,35 @@ pub unsafe extern "system" fn popup_wndproc(
             let app = &*(app);
             let delta = ((wparam.0 >> 16) & 0xFFFF) as i16 as i32;
             if delta > 0 {
-                app.cycle_restaurant(-1);
+                cycle_popup_restaurant(hwnd, app, -1);
             } else if delta < 0 {
-                app.cycle_restaurant(1);
+                cycle_popup_restaurant(hwnd, app, 1);
             } else {
                 return LRESULT(0);
             }
-            let _ = app.load_cache_for_current();
-            app.check_stale_date_and_refresh();
-            app.maybe_refresh_on_selection();
-            let state = app.snapshot();
-            popup::resize_popup_keep_position(hwnd, &state);
+            LRESULT(0)
+        }
+        WM_TIMER => {
+            if wparam.0 as usize == popup::POPUP_ANIM_TIMER_ID {
+                popup::tick_animation(hwnd);
+                return LRESULT(0);
+            }
             LRESULT(0)
         }
         WM_DESTROY => LRESULT(0),
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
+}
+
+fn cycle_popup_restaurant(hwnd: HWND, app: &App, direction: i32) {
+    let old_state = app.snapshot();
+    app.cycle_restaurant(direction);
+    let _ = app.load_cache_for_current();
+    app.check_stale_date_and_refresh();
+    app.maybe_refresh_on_selection();
+    let new_state = app.snapshot();
+    popup::resize_popup_keep_position(hwnd, &new_state);
+    popup::begin_switch_animation(hwnd, &old_state, &new_state, direction);
 }
 
 fn handle_command(hwnd: HWND, app: &App, cmd: u16) {

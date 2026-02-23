@@ -20,27 +20,39 @@ use windows::Win32::Graphics::Gdi::{
     MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetCursorPos, GetWindowRect, SetWindowPos, ShowWindow, HWND_TOPMOST,
-    SWP_SHOWWINDOW, SW_HIDE,
+    GetClientRect, GetCursorPos, GetWindowRect, KillTimer, SetTimer, SetWindowPos, ShowWindow,
+    HWND_TOPMOST, SWP_SHOWWINDOW, SW_HIDE,
 };
 
 const PADDING_X: i32 = 12;
 const PADDING_Y: i32 = 10;
 const LINE_GAP: i32 = 2;
 const ANCHOR_GAP: i32 = 10;
-const POPUP_WIDTH: i32 = 525;
+const POPUP_MAX_WIDTH: i32 = 525;
+const POPUP_MIN_WIDTH: i32 = 320;
+const POPUP_MAX_CONTENT_WIDTH: i32 = POPUP_MAX_WIDTH - PADDING_X * 2;
+const POPUP_MIN_CONTENT_WIDTH: i32 = POPUP_MIN_WIDTH - PADDING_X * 2;
 const HEADER_HEIGHT: i32 = 46;
 const HEADER_BUTTON_SIZE: i32 = 30;
 const HEADER_BUTTON_GAP: i32 = 8;
 const LOADING_HINT_DELAY_MS: i64 = 250;
 const MAX_DYNAMIC_LINES: usize = 35;
+const POPUP_ANIM_INTERVAL_MS: u32 = 33;
+const POPUP_OPEN_ANIM_MS: i64 = 120;
+const POPUP_CLOSE_ANIM_MS: i64 = 90;
+const POPUP_SWITCH_ANIM_MS: i64 = 120;
+const POPUP_SWITCH_OFFSET_PX: i32 = 6;
 
 static POPUP_LINE_BUDGET_CACHE: OnceLock<Mutex<Option<PopupLineBudgetCache>>> = OnceLock::new();
+static POPUP_ANIMATION: OnceLock<Mutex<Option<PopupAnimation>>> = OnceLock::new();
+
+pub const POPUP_ANIM_TIMER_ID: usize = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PopupLineBudgetKey {
     today_key: String,
     language: String,
+    dpi_y: i32,
     enable_antell_restaurants: bool,
     show_prices: bool,
     show_student_price: bool,
@@ -63,7 +75,8 @@ struct RestaurantCacheSignature {
 struct PopupLineBudgetCache {
     key: PopupLineBudgetKey,
     signatures: Vec<RestaurantCacheSignature>,
-    max_lines: Option<usize>,
+    max_wrapped_lines: Option<usize>,
+    max_content_width_px: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +88,55 @@ enum Line {
         segments: Vec<(String, bool)>,
     },
     Spacer,
+}
+
+#[derive(Debug, Clone)]
+enum PopupAnimationKind {
+    Open {
+        lines: Vec<Line>,
+        title: String,
+    },
+    Close {
+        lines: Vec<Line>,
+        title: String,
+    },
+    Switch {
+        old_lines: Vec<Line>,
+        new_lines: Vec<Line>,
+        old_title: String,
+        new_title: String,
+        direction: i32,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct PopupAnimation {
+    hwnd: HWND,
+    start_epoch_ms: i64,
+    duration_ms: i64,
+    kind: PopupAnimationKind,
+}
+
+#[derive(Debug, Clone)]
+enum PopupAnimationFrame {
+    Open {
+        lines: Vec<Line>,
+        title: String,
+        progress: f32,
+    },
+    Close {
+        lines: Vec<Line>,
+        title: String,
+        progress: f32,
+    },
+    Switch {
+        old_lines: Vec<Line>,
+        new_lines: Vec<Line>,
+        old_title: String,
+        new_title: String,
+        direction: i32,
+        progress: f32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,12 +154,10 @@ struct HeaderLayout {
 }
 
 pub fn toggle_popup(hwnd: HWND, state: &AppState) {
-    unsafe {
-        if is_visible(hwnd) {
-            ShowWindow(hwnd, SW_HIDE);
-        } else {
-            show_popup(hwnd, state);
-        }
+    if is_visible(hwnd) {
+        begin_close_animation(hwnd, state);
+    } else {
+        show_popup(hwnd, state);
     }
 }
 
@@ -108,6 +168,7 @@ pub fn show_popup(hwnd: HWND, state: &AppState) {
         let _ = GetCursorPos(&mut cursor);
         let (x, y) = position_near_point(width, height, cursor);
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
+        begin_open_animation(hwnd, state);
         InvalidateRect(hwnd, None, true);
     }
 }
@@ -117,6 +178,7 @@ pub fn show_popup_at(hwnd: HWND, state: &AppState, anchor: POINT) {
         let (width, height) = desired_size(hwnd, state);
         let (x, y) = position_near_point(width, height, anchor);
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
+        begin_open_animation(hwnd, state);
         InvalidateRect(hwnd, None, true);
     }
 }
@@ -126,6 +188,7 @@ pub fn show_popup_for_tray_icon(hwnd: HWND, state: &AppState, tray_rect: RECT) {
         let (width, height) = desired_size(hwnd, state);
         let (x, y) = position_near_tray_rect(width, height, tray_rect);
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
+        begin_open_animation(hwnd, state);
         InvalidateRect(hwnd, None, true);
     }
 }
@@ -150,7 +213,161 @@ pub fn resize_popup_keep_position(hwnd: HWND, state: &AppState) {
 
 pub fn hide_popup(hwnd: HWND) {
     unsafe {
+        clear_animation_state(hwnd);
+        let _ = KillTimer(hwnd, POPUP_ANIM_TIMER_ID);
         ShowWindow(hwnd, SW_HIDE);
+    }
+}
+
+fn begin_open_animation(hwnd: HWND, state: &AppState) {
+    start_animation(
+        hwnd,
+        POPUP_OPEN_ANIM_MS,
+        PopupAnimationKind::Open {
+            lines: build_lines(state),
+            title: header_title(state),
+        },
+    );
+}
+
+fn start_animation(hwnd: HWND, duration_ms: i64, kind: PopupAnimationKind) {
+    let store = POPUP_ANIMATION.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = store.lock() {
+        *guard = Some(PopupAnimation {
+            hwnd,
+            start_epoch_ms: now_epoch_ms(),
+            duration_ms: duration_ms.max(1),
+            kind,
+        });
+    }
+    unsafe {
+        let _ = SetTimer(hwnd, POPUP_ANIM_TIMER_ID, POPUP_ANIM_INTERVAL_MS, None);
+        InvalidateRect(hwnd, None, true);
+    }
+}
+
+fn clear_animation_state(hwnd: HWND) {
+    let store = POPUP_ANIMATION.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = store.lock() {
+        if guard
+            .as_ref()
+            .is_some_and(|anim| anim.hwnd == hwnd)
+        {
+            *guard = None;
+        }
+    }
+}
+
+fn current_animation_frame(hwnd: HWND) -> Option<PopupAnimationFrame> {
+    let store = POPUP_ANIMATION.get_or_init(|| Mutex::new(None));
+    let guard = store.lock().ok()?;
+    let anim = guard.as_ref()?;
+    if anim.hwnd != hwnd {
+        return None;
+    }
+    let elapsed = now_epoch_ms().saturating_sub(anim.start_epoch_ms);
+    let progress = (elapsed as f32 / anim.duration_ms.max(1) as f32).clamp(0.0, 1.0);
+    match &anim.kind {
+        PopupAnimationKind::Open { lines, title } => Some(PopupAnimationFrame::Open {
+            lines: lines.clone(),
+            title: title.clone(),
+            progress,
+        }),
+        PopupAnimationKind::Close { lines, title } => Some(PopupAnimationFrame::Close {
+            lines: lines.clone(),
+            title: title.clone(),
+            progress,
+        }),
+        PopupAnimationKind::Switch {
+            old_lines,
+            new_lines,
+            old_title,
+            new_title,
+            direction,
+        } => Some(PopupAnimationFrame::Switch {
+            old_lines: old_lines.clone(),
+            new_lines: new_lines.clone(),
+            old_title: old_title.clone(),
+            new_title: new_title.clone(),
+            direction: *direction,
+            progress,
+        }),
+    }
+}
+
+pub fn begin_close_animation(hwnd: HWND, state: &AppState) {
+    if !is_visible(hwnd) {
+        return;
+    }
+    start_animation(
+        hwnd,
+        POPUP_CLOSE_ANIM_MS,
+        PopupAnimationKind::Close {
+            lines: build_lines(state),
+            title: header_title(state),
+        },
+    );
+}
+
+pub fn begin_switch_animation(
+    hwnd: HWND,
+    old_state: &AppState,
+    new_state: &AppState,
+    direction: i32,
+) {
+    start_animation(
+        hwnd,
+        POPUP_SWITCH_ANIM_MS,
+        PopupAnimationKind::Switch {
+            old_lines: build_lines(old_state),
+            new_lines: build_lines(new_state),
+            old_title: header_title(old_state),
+            new_title: header_title(new_state),
+            direction,
+        },
+    );
+}
+
+pub fn tick_animation(hwnd: HWND) {
+    let now = now_epoch_ms();
+    let mut active = false;
+    let mut finished = false;
+    let mut hide_after = false;
+
+    {
+        let store = POPUP_ANIMATION.get_or_init(|| Mutex::new(None));
+        let mut guard = match store.lock() {
+            Ok(value) => value,
+            Err(_) => return,
+        };
+        if let Some(anim) = guard.as_ref() {
+            if anim.hwnd == hwnd {
+                active = true;
+                let elapsed = now.saturating_sub(anim.start_epoch_ms);
+                if elapsed >= anim.duration_ms.max(1) {
+                    finished = true;
+                    hide_after = matches!(anim.kind, PopupAnimationKind::Close { .. });
+                }
+            }
+        }
+        if finished {
+            *guard = None;
+        }
+    }
+
+    unsafe {
+        if !active {
+            let _ = KillTimer(hwnd, POPUP_ANIM_TIMER_ID);
+            return;
+        }
+        if finished {
+            let _ = KillTimer(hwnd, POPUP_ANIM_TIMER_ID);
+            if hide_after {
+                ShowWindow(hwnd, SW_HIDE);
+                return;
+            }
+        }
+        InvalidateRect(hwnd, None, true);
     }
 }
 
@@ -196,10 +413,10 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
         let (normal_font, bold_font, small_font, small_bold_font) = create_fonts(hdc);
         let _old_font = SelectObject(hdc, normal_font);
 
-        let lines = build_lines(state);
         let metrics = text_metrics(hdc, normal_font);
         let line_height = metrics.tmHeight as i32 + LINE_GAP;
         let content_width = (width - PADDING_X * 2).max(40);
+        let animation = current_animation_frame(hwnd);
 
         let header_rect = RECT {
             left: rect.left,
@@ -237,18 +454,6 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
             normal_font,
         );
 
-        SelectObject(hdc, bold_font);
-        SetTextColor(hdc, text_color);
-        let title = fit_text_to_width(
-            hdc,
-            &header_title(state),
-            (layout.close.left - layout.next.right - 24).max(40),
-        );
-        let title_width = text_width(hdc, &title);
-        let title_x = ((width - title_width) / 2).max(layout.next.right + 12);
-        let title_y = header_rect.top + (HEADER_HEIGHT - metrics.tmHeight as i32) / 2 - 1;
-        draw_text_line(hdc, &title, title_x, title_y);
-
         let divider_rect = RECT {
             left: rect.left,
             top: header_rect.bottom - 1,
@@ -259,57 +464,144 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
         FillRect(hdc, &divider_rect, divider_brush);
         DeleteObject(divider_brush);
 
-        let mut y = HEADER_HEIGHT + PADDING_Y;
-        for line in lines {
-            match line {
-                Line::Heading(text) => {
-                    SelectObject(hdc, bold_font);
-                    SetTextColor(hdc, text_color);
-                    let clipped = fit_text_to_width(hdc, &text, content_width);
-                    draw_text_line(hdc, &clipped, PADDING_X, y);
-                    y += line_height;
+        if let Some(frame) = animation {
+            match frame {
+                PopupAnimationFrame::Open {
+                    lines,
+                    title,
+                    progress,
+                } => {
+                    let y_offset =
+                        ((1.0 - progress) * POPUP_SWITCH_OFFSET_PX as f32).round() as i32;
+                    let layer_text = lerp_color(bg_color, text_color, progress);
+                    let layer_suffix = lerp_color(bg_color, suffix_color, progress);
+                    draw_content_layer(
+                        hdc,
+                        &title,
+                        &lines,
+                        DrawLayerParams {
+                            width,
+                            content_width,
+                            text_color: layer_text,
+                            suffix_color: layer_suffix,
+                            layout: &layout,
+                            metrics: &metrics,
+                            line_height,
+                            normal_font,
+                            bold_font,
+                            small_font,
+                            small_bold_font,
+                            y_offset,
+                        },
+                    );
                 }
-                Line::Text(text) => {
-                    SelectObject(hdc, normal_font);
-                    SetTextColor(hdc, text_color);
-                    let clipped = fit_text_to_width(hdc, &text, content_width);
-                    draw_text_line(hdc, &clipped, PADDING_X, y);
-                    y += line_height;
+                PopupAnimationFrame::Close {
+                    lines,
+                    title,
+                    progress,
+                } => {
+                    let y_offset = -((progress * POPUP_SWITCH_OFFSET_PX as f32).round() as i32);
+                    let layer_text = lerp_color(bg_color, text_color, 1.0 - progress);
+                    let layer_suffix = lerp_color(bg_color, suffix_color, 1.0 - progress);
+                    draw_content_layer(
+                        hdc,
+                        &title,
+                        &lines,
+                        DrawLayerParams {
+                            width,
+                            content_width,
+                            text_color: layer_text,
+                            suffix_color: layer_suffix,
+                            layout: &layout,
+                            metrics: &metrics,
+                            line_height,
+                            normal_font,
+                            bold_font,
+                            small_font,
+                            small_bold_font,
+                            y_offset,
+                        },
+                    );
                 }
-                Line::TextWithSuffixSegments { main, segments } => {
-                    SelectObject(hdc, normal_font);
-                    SetTextColor(hdc, text_color);
-                    let mut suffix_width = 0;
-                    for (segment, bold) in &segments {
-                        let font = if *bold { small_bold_font } else { small_font };
-                        SelectObject(hdc, font);
-                        suffix_width += text_width(hdc, segment);
-                    }
-                    let max_main = (content_width - suffix_width - 4).max(24);
-                    SelectObject(hdc, normal_font);
-                    let clipped_main = fit_text_to_width(hdc, &main, max_main);
-                    let main_width = text_width(hdc, &clipped_main);
-                    draw_text_line(hdc, &clipped_main, PADDING_X, y);
-                    if !segments.is_empty() {
-                        let suffix_x = PADDING_X + main_width + 4;
-                        if suffix_x < (PADDING_X + content_width) {
-                            draw_text_segments(
-                                hdc,
-                                &segments,
-                                suffix_x,
-                                y + 1,
-                                small_font,
-                                small_bold_font,
-                                suffix_color,
-                            );
-                        }
-                    }
-                    y += line_height;
-                }
-                Line::Spacer => {
-                    y += line_height / 2;
+                PopupAnimationFrame::Switch {
+                    old_lines,
+                    new_lines,
+                    old_title,
+                    new_title,
+                    direction,
+                    progress,
+                } => {
+                    let dir = if direction >= 0 { 1 } else { -1 };
+                    let old_offset =
+                        -dir * ((progress * POPUP_SWITCH_OFFSET_PX as f32).round() as i32);
+                    let new_offset = dir
+                        * (((1.0 - progress) * POPUP_SWITCH_OFFSET_PX as f32).round() as i32);
+                    let old_text = lerp_color(bg_color, text_color, 1.0 - progress);
+                    let old_suffix = lerp_color(bg_color, suffix_color, 1.0 - progress);
+                    let new_text = lerp_color(bg_color, text_color, progress);
+                    let new_suffix = lerp_color(bg_color, suffix_color, progress);
+                    draw_content_layer(
+                        hdc,
+                        &old_title,
+                        &old_lines,
+                        DrawLayerParams {
+                            width,
+                            content_width,
+                            text_color: old_text,
+                            suffix_color: old_suffix,
+                            layout: &layout,
+                            metrics: &metrics,
+                            line_height,
+                            normal_font,
+                            bold_font,
+                            small_font,
+                            small_bold_font,
+                            y_offset: old_offset,
+                        },
+                    );
+                    draw_content_layer(
+                        hdc,
+                        &new_title,
+                        &new_lines,
+                        DrawLayerParams {
+                            width,
+                            content_width,
+                            text_color: new_text,
+                            suffix_color: new_suffix,
+                            layout: &layout,
+                            metrics: &metrics,
+                            line_height,
+                            normal_font,
+                            bold_font,
+                            small_font,
+                            small_bold_font,
+                            y_offset: new_offset,
+                        },
+                    );
                 }
             }
+        } else {
+            let lines = build_lines(state);
+            let title = header_title(state);
+            draw_content_layer(
+                hdc,
+                &title,
+                &lines,
+                DrawLayerParams {
+                    width,
+                    content_width,
+                    text_color,
+                    suffix_color,
+                    layout: &layout,
+                    metrics: &metrics,
+                    line_height,
+                    normal_font,
+                    bold_font,
+                    small_font,
+                    small_bold_font,
+                    y_offset: 0,
+                },
+            );
         }
 
         SelectObject(hdc, _old_font);
@@ -319,6 +611,326 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
         DeleteObject(small_bold_font);
         EndPaint(hwnd, &ps);
     }
+}
+
+struct DrawLayerParams<'a> {
+    width: i32,
+    content_width: i32,
+    text_color: COLORREF,
+    suffix_color: COLORREF,
+    layout: &'a HeaderLayout,
+    metrics: &'a TEXTMETRICW,
+    line_height: i32,
+    normal_font: HFONT,
+    bold_font: HFONT,
+    small_font: HFONT,
+    small_bold_font: HFONT,
+    y_offset: i32,
+}
+
+fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerParams<'_>) {
+    unsafe {
+        SelectObject(hdc, params.bold_font);
+        SetTextColor(hdc, params.text_color);
+    }
+
+    let clipped_title = fit_text_to_width(
+        hdc,
+        title,
+        (params.layout.close.left - params.layout.next.right - 24).max(40),
+    );
+    let title_width = text_width(hdc, &clipped_title);
+    let title_x = ((params.width - title_width) / 2).max(params.layout.next.right + 12);
+    let title_y =
+        ((HEADER_HEIGHT - params.metrics.tmHeight as i32) / 2 - 1) + params.y_offset;
+    draw_text_line(hdc, &clipped_title, title_x, title_y);
+
+    let mut y = HEADER_HEIGHT + PADDING_Y + params.y_offset;
+    for line in lines {
+        match line {
+            Line::Heading(text) => {
+                unsafe {
+                    SelectObject(hdc, params.bold_font);
+                    SetTextColor(hdc, params.text_color);
+                }
+                let wrapped = wrap_text_to_width(hdc, text, params.content_width);
+                if wrapped.is_empty() {
+                    y += params.line_height;
+                } else {
+                    for row in wrapped {
+                        draw_text_line(hdc, &row, PADDING_X, y);
+                        y += params.line_height;
+                    }
+                }
+            }
+            Line::Text(text) => {
+                unsafe {
+                    SelectObject(hdc, params.normal_font);
+                    SetTextColor(hdc, params.text_color);
+                }
+                let wrapped = wrap_text_to_width(hdc, text, params.content_width);
+                if wrapped.is_empty() {
+                    y += params.line_height;
+                } else {
+                    for row in wrapped {
+                        draw_text_line(hdc, &row, PADDING_X, y);
+                        y += params.line_height;
+                    }
+                }
+            }
+            Line::TextWithSuffixSegments { main, segments } => {
+                unsafe {
+                    SelectObject(hdc, params.normal_font);
+                    SetTextColor(hdc, params.text_color);
+                }
+                let styled_width = text_with_suffix_width(
+                    hdc,
+                    params.normal_font,
+                    params.small_font,
+                    params.small_bold_font,
+                    main,
+                    segments,
+                );
+                if styled_width <= params.content_width {
+                    let mut suffix_width = 0;
+                    for (segment, bold) in segments {
+                        let font = if *bold {
+                            params.small_bold_font
+                        } else {
+                            params.small_font
+                        };
+                        unsafe {
+                            SelectObject(hdc, font);
+                        }
+                        suffix_width += text_width(hdc, segment);
+                    }
+                    let max_main = (params.content_width - suffix_width - 4).max(24);
+                    unsafe {
+                        SelectObject(hdc, params.normal_font);
+                    }
+                    let clipped_main = fit_text_to_width(hdc, main, max_main);
+                    let main_width = text_width(hdc, &clipped_main);
+                    draw_text_line(hdc, &clipped_main, PADDING_X, y);
+                    if !segments.is_empty() {
+                        let suffix_x = PADDING_X + main_width + 4;
+                        if suffix_x < (PADDING_X + params.content_width) {
+                            draw_text_segments(
+                                hdc,
+                                segments,
+                                suffix_x,
+                                y + 1,
+                                params.small_font,
+                                params.small_bold_font,
+                                params.suffix_color,
+                            );
+                        }
+                    }
+                    y += params.line_height;
+                    continue;
+                }
+                unsafe {
+                    SelectObject(hdc, params.normal_font);
+                }
+                let plain = flatten_text_with_suffix(main, segments);
+                let wrapped = wrap_text_to_width(hdc, &plain, params.content_width);
+                if wrapped.is_empty() {
+                    y += params.line_height;
+                } else {
+                    for row in wrapped {
+                        draw_text_line(hdc, &row, PADDING_X, y);
+                        y += params.line_height;
+                    }
+                }
+            }
+            Line::Spacer => {
+                y += params.line_height / 2;
+            }
+        }
+    }
+}
+
+fn measure_lines_layout(
+    hdc: HDC,
+    normal_font: HFONT,
+    bold_font: HFONT,
+    small_font: HFONT,
+    small_bold_font: HFONT,
+    lines: &[Line],
+    wrap_content_width: i32,
+) -> LineLayoutMetrics {
+    let wrap_width = wrap_content_width.max(40);
+    let mut required_content_width = 0;
+    let mut wrapped_line_count = 0usize;
+
+    for line in lines {
+        match line {
+            Line::Heading(text) => {
+                let width = text_width_with_font(hdc, bold_font, text);
+                required_content_width = required_content_width.max(width);
+                let rows = wrapped_line_count_for_text(hdc, bold_font, text, wrap_width);
+                wrapped_line_count += rows.max(1);
+            }
+            Line::Text(text) => {
+                let width = text_width_with_font(hdc, normal_font, text);
+                required_content_width = required_content_width.max(width);
+                let rows = wrapped_line_count_for_text(hdc, normal_font, text, wrap_width);
+                wrapped_line_count += rows.max(1);
+            }
+            Line::TextWithSuffixSegments { main, segments } => {
+                let styled_width = text_with_suffix_width(
+                    hdc,
+                    normal_font,
+                    small_font,
+                    small_bold_font,
+                    main,
+                    segments,
+                );
+                required_content_width = required_content_width.max(styled_width);
+                if styled_width <= wrap_width {
+                    wrapped_line_count += 1;
+                } else {
+                    let plain = flatten_text_with_suffix(main, segments);
+                    let rows =
+                        wrapped_line_count_for_text(hdc, normal_font, &plain, wrap_width).max(1);
+                    wrapped_line_count += rows;
+                }
+            }
+            Line::Spacer => {
+                wrapped_line_count += 1;
+            }
+        }
+    }
+
+    LineLayoutMetrics {
+        required_content_width,
+        wrapped_line_count,
+    }
+}
+
+fn wrapped_line_count_for_text(hdc: HDC, font: HFONT, text: &str, max_width: i32) -> usize {
+    let wrapped = wrap_text_to_width_with_font(hdc, font, text, max_width);
+    wrapped.len()
+}
+
+fn wrap_text_to_width_with_font(hdc: HDC, font: HFONT, text: &str, max_width: i32) -> Vec<String> {
+    unsafe {
+        let old = SelectObject(hdc, font);
+        let wrapped = wrap_text_to_width(hdc, text, max_width);
+        SelectObject(hdc, old);
+        wrapped
+    }
+}
+
+fn wrap_text_to_width(hdc: HDC, text: &str, max_width: i32) -> Vec<String> {
+    let clean = normalize_text(text);
+    if clean.is_empty() {
+        return Vec::new();
+    }
+    let limit = max_width.max(16);
+    if text_width(hdc, &clean) <= limit {
+        return vec![clean];
+    }
+
+    let words: Vec<String> = clean
+        .split_whitespace()
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect();
+    if words.is_empty() {
+        return vec![clean];
+    }
+
+    let mut rows: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for word in words {
+        let candidate = if current.is_empty() {
+            word.clone()
+        } else {
+            format!("{} {}", current, word)
+        };
+        if text_width(hdc, &candidate) <= limit {
+            current = candidate;
+            continue;
+        }
+
+        if !current.is_empty() {
+            rows.push(current.clone());
+            current.clear();
+        }
+
+        if text_width(hdc, &word) <= limit {
+            current = word;
+        } else {
+            rows.extend(split_long_token_to_width(hdc, &word, limit));
+        }
+    }
+
+    if !current.is_empty() {
+        rows.push(current);
+    }
+    if rows.is_empty() {
+        rows.push(clean);
+    }
+    rows
+}
+
+fn split_long_token_to_width(hdc: HDC, token: &str, max_width: i32) -> Vec<String> {
+    let mut rows = Vec::new();
+    let mut current = String::new();
+    for ch in token.chars() {
+        let mut candidate = current.clone();
+        candidate.push(ch);
+        if !current.is_empty() && text_width(hdc, &candidate) > max_width {
+            rows.push(current.clone());
+            current.clear();
+        }
+        current.push(ch);
+    }
+    if !current.is_empty() {
+        rows.push(current);
+    }
+    if rows.is_empty() {
+        rows.push(token.to_string());
+    }
+    rows
+}
+
+fn text_width_with_font(hdc: HDC, font: HFONT, text: &str) -> i32 {
+    unsafe {
+        let old = SelectObject(hdc, font);
+        let width = text_width(hdc, text);
+        SelectObject(hdc, old);
+        width
+    }
+}
+
+fn text_with_suffix_width(
+    hdc: HDC,
+    normal_font: HFONT,
+    small_font: HFONT,
+    small_bold_font: HFONT,
+    main: &str,
+    segments: &[(String, bool)],
+) -> i32 {
+    let main_width = text_width_with_font(hdc, normal_font, main);
+    if segments.is_empty() {
+        return main_width;
+    }
+
+    let mut suffix_width = 0;
+    for (segment, bold) in segments {
+        let font = if *bold { small_bold_font } else { small_font };
+        suffix_width += text_width_with_font(hdc, font, segment);
+    }
+    main_width + suffix_width + 4
+}
+
+fn flatten_text_with_suffix(main: &str, segments: &[(String, bool)]) -> String {
+    let mut out = normalize_text(main);
+    for (segment, _) in segments {
+        out.push_str(segment);
+    }
+    out
 }
 
 fn draw_text_segments(
@@ -466,19 +1078,58 @@ fn text_width(hdc: HDC, text: &str) -> i32 {
 fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
     unsafe {
         let hdc = windows::Win32::Graphics::Gdi::GetDC(hwnd);
+        let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
         let (normal_font, bold_font, small_font, small_bold_font) = create_fonts(hdc);
         let current_lines = build_lines(state);
-        let target_lines = popup_target_line_count(state, current_lines.len());
+        let current_metrics = measure_lines_layout(
+            hdc,
+            normal_font,
+            bold_font,
+            small_font,
+            small_bold_font,
+            &current_lines,
+            POPUP_MAX_CONTENT_WIDTH,
+        );
+        let budget = popup_cached_layout_budget(
+            state,
+            hdc,
+            normal_font,
+            bold_font,
+            small_font,
+            small_bold_font,
+            dpi_y,
+        );
+        let target_content_width = budget
+            .max_content_width_px
+            .unwrap_or(current_metrics.required_content_width)
+            .clamp(POPUP_MIN_CONTENT_WIDTH, POPUP_MAX_CONTENT_WIDTH);
+        let current_wrapped_metrics = measure_lines_layout(
+            hdc,
+            normal_font,
+            bold_font,
+            small_font,
+            small_bold_font,
+            &current_lines,
+            target_content_width,
+        );
+        let mut target_lines = budget
+            .max_wrapped_lines
+            .unwrap_or(current_wrapped_metrics.wrapped_line_count);
+        if budget.max_wrapped_lines.is_some() {
+            target_lines = target_lines.max(current_wrapped_metrics.wrapped_line_count);
+        }
+        target_lines = target_lines.min(MAX_DYNAMIC_LINES);
         let metrics = text_metrics(hdc, normal_font);
         let line_height = metrics.tmHeight as i32 + LINE_GAP;
         let height = HEADER_HEIGHT + (target_lines as i32 * line_height) + PADDING_Y * 2;
+        let width = (target_content_width + PADDING_X * 2).clamp(POPUP_MIN_WIDTH, POPUP_MAX_WIDTH);
         DeleteObject(normal_font);
         DeleteObject(bold_font);
         DeleteObject(small_font);
         DeleteObject(small_bold_font);
         windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
 
-        (POPUP_WIDTH, height.max(HEADER_HEIGHT + 120))
+        (width, height.max(HEADER_HEIGHT + 120))
     }
 }
 
@@ -560,16 +1211,8 @@ fn create_fonts(hdc: HDC) -> (HFONT, HFONT, HFONT, HFONT) {
 fn build_lines(state: &AppState) -> Vec<Line> {
     let mut lines = Vec::new();
 
-    let mut restaurant = normalize_text(&state.restaurant_name);
     if state.stale_date {
-        if restaurant.is_empty() {
-            restaurant = "[STALE]".to_string();
-        } else {
-            restaurant = format!("[STALE] {}", restaurant);
-        }
-    }
-    if !restaurant.is_empty() {
-        lines.push(Line::Heading(restaurant));
+        lines.push(Line::Heading("[STALE]".to_string()));
     }
 
     let show_loading_hint = state.status == FetchStatus::Loading
@@ -638,27 +1281,52 @@ fn build_lines(state: &AppState) -> Vec<Line> {
     lines
 }
 
-fn popup_target_line_count(state: &AppState, current_lines: usize) -> usize {
-    let today_key = local_today_key();
-    let key = line_budget_key(&state.settings, &today_key);
-    let signatures = cache_signatures(&state.settings);
-
-    if let Some(max_lines) = cached_line_budget(&key, &signatures) {
-        return max_lines.unwrap_or(current_lines).min(MAX_DYNAMIC_LINES);
-    }
-
-    let max_lines = max_today_cached_line_count(state, &today_key);
-    update_line_budget_cache(key, signatures, max_lines);
-    match max_lines {
-        Some(count) => count.min(MAX_DYNAMIC_LINES),
-        None => current_lines.min(MAX_DYNAMIC_LINES),
-    }
+#[derive(Debug, Clone, Copy)]
+struct CachedLayoutBudget {
+    max_wrapped_lines: Option<usize>,
+    max_content_width_px: Option<i32>,
 }
 
-fn line_budget_key(settings: &Settings, today_key: &str) -> PopupLineBudgetKey {
+#[derive(Debug, Clone, Copy)]
+struct LineLayoutMetrics {
+    required_content_width: i32,
+    wrapped_line_count: usize,
+}
+
+fn popup_cached_layout_budget(
+    state: &AppState,
+    hdc: HDC,
+    normal_font: HFONT,
+    bold_font: HFONT,
+    small_font: HFONT,
+    small_bold_font: HFONT,
+    dpi_y: i32,
+) -> CachedLayoutBudget {
+    let today_key = local_today_key();
+    let key = line_budget_key(&state.settings, &today_key, dpi_y);
+    let signatures = cache_signatures(&state.settings);
+    if let Some(budget) = cached_line_budget(&key, &signatures) {
+        return budget;
+    }
+
+    let budget = max_today_cached_layout_budget(
+        state,
+        &today_key,
+        hdc,
+        normal_font,
+        bold_font,
+        small_font,
+        small_bold_font,
+    );
+    update_line_budget_cache(key, signatures, budget);
+    budget
+}
+
+fn line_budget_key(settings: &Settings, today_key: &str, dpi_y: i32) -> PopupLineBudgetKey {
     PopupLineBudgetKey {
         today_key: today_key.to_string(),
         language: settings.language.clone(),
+        dpi_y,
         enable_antell_restaurants: settings.enable_antell_restaurants,
         show_prices: settings.show_prices,
         show_student_price: settings.show_student_price,
@@ -689,12 +1357,15 @@ fn cache_signatures(settings: &Settings) -> Vec<RestaurantCacheSignature> {
 fn cached_line_budget(
     key: &PopupLineBudgetKey,
     signatures: &[RestaurantCacheSignature],
-) -> Option<Option<usize>> {
+) -> Option<CachedLayoutBudget> {
     let cache = POPUP_LINE_BUDGET_CACHE.get_or_init(|| Mutex::new(None));
     let guard = cache.lock().ok()?;
     let entry = guard.as_ref()?;
     if entry.key == *key && entry.signatures == signatures {
-        Some(entry.max_lines)
+        Some(CachedLayoutBudget {
+            max_wrapped_lines: entry.max_wrapped_lines,
+            max_content_width_px: entry.max_content_width_px,
+        })
     } else {
         None
     }
@@ -703,21 +1374,31 @@ fn cached_line_budget(
 fn update_line_budget_cache(
     key: PopupLineBudgetKey,
     signatures: Vec<RestaurantCacheSignature>,
-    max_lines: Option<usize>,
+    budget: CachedLayoutBudget,
 ) {
     let cache = POPUP_LINE_BUDGET_CACHE.get_or_init(|| Mutex::new(None));
     if let Ok(mut guard) = cache.lock() {
         *guard = Some(PopupLineBudgetCache {
             key,
             signatures,
-            max_lines,
+            max_wrapped_lines: budget.max_wrapped_lines,
+            max_content_width_px: budget.max_content_width_px,
         });
     }
 }
 
-fn max_today_cached_line_count(state: &AppState, today_key: &str) -> Option<usize> {
+fn max_today_cached_layout_budget(
+    state: &AppState,
+    today_key: &str,
+    hdc: HDC,
+    normal_font: HFONT,
+    bold_font: HFONT,
+    small_font: HFONT,
+    small_bold_font: HFONT,
+) -> CachedLayoutBudget {
     let settings = &state.settings;
-    let mut max_lines: Option<usize> = None;
+    let mut max_wrapped_lines: Option<usize> = None;
+    let mut max_content_width_px: Option<i32> = None;
 
     for restaurant in available_restaurants(settings.enable_antell_restaurants) {
         let raw = match cache::read_cache(restaurant.provider, restaurant.code, &settings.language)
@@ -742,11 +1423,30 @@ fn max_today_cached_line_count(state: &AppState, today_key: &str) -> Option<usiz
 
         let candidate_state =
             popup_state_from_cached_result(settings, restaurant, &parsed, today_key);
-        let candidate_lines = build_lines(&candidate_state).len();
-        max_lines = Some(max_lines.map_or(candidate_lines, |prev| prev.max(candidate_lines)));
+        let candidate_lines = build_lines(&candidate_state);
+        let metrics = measure_lines_layout(
+            hdc,
+            normal_font,
+            bold_font,
+            small_font,
+            small_bold_font,
+            &candidate_lines,
+            POPUP_MAX_CONTENT_WIDTH,
+        );
+        max_wrapped_lines = Some(
+            max_wrapped_lines
+                .map_or(metrics.wrapped_line_count, |prev| prev.max(metrics.wrapped_line_count)),
+        );
+        max_content_width_px = Some(
+            max_content_width_px
+                .map_or(metrics.required_content_width, |prev| prev.max(metrics.required_content_width)),
+        );
     }
 
-    max_lines
+    CachedLayoutBudget {
+        max_wrapped_lines,
+        max_content_width_px,
+    }
 }
 
 fn is_today_valid_cache(
@@ -1011,6 +1711,24 @@ fn now_epoch_ms() -> i64 {
 
 fn point_in_rect(rect: &RECT, x: i32, y: i32) -> bool {
     x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+}
+
+fn lerp_color(from: COLORREF, to: COLORREF, t: f32) -> COLORREF {
+    let p = t.clamp(0.0, 1.0);
+    let (fr, fg, fb) = color_channels(from);
+    let (tr, tg, tb) = color_channels(to);
+    let r = fr as f32 + (tr as f32 - fr as f32) * p;
+    let g = fg as f32 + (tg as f32 - fg as f32) * p;
+    let b = fb as f32 + (tb as f32 - fb as f32) * p;
+    COLORREF(((b as u32) << 16) | ((g as u32) << 8) | (r as u32))
+}
+
+fn color_channels(color: COLORREF) -> (u8, u8, u8) {
+    let value = color.0;
+    let r = (value & 0xFF) as u8;
+    let g = ((value >> 8) & 0xFF) as u8;
+    let b = ((value >> 16) & 0xFF) as u8;
+    (r, g, b)
 }
 
 fn theme_colors(theme: &str) -> (COLORREF, COLORREF, COLORREF, COLORREF, COLORREF, COLORREF) {
