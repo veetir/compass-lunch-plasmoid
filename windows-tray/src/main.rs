@@ -1,7 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
-mod api;
 mod antell;
+mod api;
 mod app;
 mod cache;
 mod format;
@@ -24,10 +24,10 @@ use crate::restaurant::{restaurant_for_code, Provider};
 use crate::settings::load_settings;
 use crate::util::to_wstring;
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HWND};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DispatchMessageW, GetMessageW, TranslateMessage, MSG, SW_HIDE, WS_EX_NOACTIVATE,
+    CreateWindowExW, DispatchMessageW, GetMessageW, TranslateMessage, MSG, SW_HIDE,
     WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_POPUP,
 };
 
@@ -68,11 +68,15 @@ fn main() -> anyhow::Result<()> {
         );
 
         let popup_class = to_wstring(winmsg::POPUP_WND_CLASS);
-        let popup_style = if no_tray { WS_OVERLAPPEDWINDOW } else { WS_POPUP };
+        let popup_style = if no_tray {
+            WS_OVERLAPPEDWINDOW
+        } else {
+            WS_POPUP
+        };
         let popup_ex_style = if no_tray {
             Default::default()
         } else {
-            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
+            WS_EX_TOOLWINDOW
         };
         let popup_hwnd = CreateWindowExW(
             popup_ex_style,
@@ -130,7 +134,7 @@ fn main() -> anyhow::Result<()> {
 
 #[cfg(target_os = "windows")]
 fn ensure_console() {
-    use windows::Win32::System::Console::{AttachConsole, AllocConsole, ATTACH_PARENT_PROCESS};
+    use windows::Win32::System::Console::{AllocConsole, AttachConsole, ATTACH_PARENT_PROCESS};
     unsafe {
         if AttachConsole(ATTACH_PARENT_PROCESS).is_err() {
             let _ = AllocConsole();
@@ -144,7 +148,11 @@ fn ensure_console() {}
 fn print_today_menu_with_settings(settings: &crate::settings::Settings) -> anyhow::Result<()> {
     let result = api::fetch_today(settings);
     if !result.ok {
-        eprintln!("{}: {}", text_for(&settings.language, "fetchError"), result.error_message);
+        eprintln!(
+            "{}: {}",
+            text_for(&settings.language, "fetchError"),
+            result.error_message
+        );
         return Ok(());
     }
 
@@ -154,7 +162,11 @@ fn print_today_menu_with_settings(settings: &crate::settings::Settings) -> anyho
         println!("{}", date_line);
     }
 
-    let provider = restaurant_for_code(&settings.restaurant_code, settings.enable_antell_restaurants).provider;
+    let provider = restaurant_for_code(
+        &settings.restaurant_code,
+        settings.enable_antell_restaurants,
+    )
+    .provider;
     let price_groups = PriceGroups {
         student: settings.show_student_price,
         staff: settings.show_staff_price,
@@ -182,7 +194,11 @@ fn print_today_menu_with_settings(settings: &crate::settings::Settings) -> anyho
                         }
                         let (main, suffix) = split_component_suffix(&component);
                         if !settings.show_allergens {
-                            let value = if main.is_empty() { component.clone() } else { main };
+                            let value = if main.is_empty() {
+                                component.clone()
+                            } else {
+                                main
+                            };
                             println!("  ▸ {}", value);
                         } else if !suffix.is_empty() {
                             println!("  ▸ {} {}", main, suffix);

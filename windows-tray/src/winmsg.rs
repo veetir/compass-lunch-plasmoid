@@ -8,10 +8,11 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowLongPtrW, GetWindowRect, KillTimer,
-    LoadCursorW, PostQuitMessage, RegisterClassExW, SetTimer, SetWindowLongPtrW, CREATESTRUCTW,
-    CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW, WM_ACTIVATE, WM_APP, WM_COMMAND,
-    WM_CONTEXTMENU, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_RBUTTONUP, WM_TIMER, WNDCLASSEXW,
+    LoadCursorW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetTimer,
+    SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW,
+    WM_ACTIVATE, WM_APP, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONUP,
+    WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_RBUTTONUP, WM_TIMER,
+    WNDCLASSEXW,
 };
 
 pub const TRAY_WND_CLASS: &str = "CompassLunchTrayWindow";
@@ -86,68 +87,28 @@ pub unsafe extern "system" fn tray_wndproc(
                 ));
             }
             match event {
-                WM_MOUSEMOVE => {
-                    if app.is_context_menu_open() {
-                        return LRESULT(0);
-                    }
-                    let cursor = cursor_point();
-                    if let Some(point) = cursor {
-                        app.set_hover_point(point.x, point.y);
-                    }
-                    if !popup_is_visible(app.hwnd_popup()) {
-                        log_line(&format!(
-                            "tray callback event=0x{:04x} raw=0x{:08x}",
-                            event, event_raw
-                        ));
-                        let state = app.snapshot();
-                        if let Some(cursor_point) = cursor {
-                            if let Some(rect) = tray::tray_icon_rect(hwnd) {
-                                if point_near_rect(&rect, cursor_point.x, cursor_point.y, 12) {
-                                    popup::show_popup_for_tray_icon(app.hwnd_popup(), &state, rect);
-                                } else {
-                                    popup::show_popup_at(
-                                        app.hwnd_popup(),
-                                        &state,
-                                        POINT {
-                                            x: cursor_point.x,
-                                            y: cursor_point.y,
-                                        },
-                                    );
-                                }
-                            } else {
-                                popup::show_popup_at(
-                                    app.hwnd_popup(),
-                                    &state,
-                                    POINT {
-                                        x: cursor_point.x,
-                                        y: cursor_point.y,
-                                    },
-                                );
-                            }
-                        } else if let Some((x, y)) = app.hover_point() {
-                            popup::show_popup_at(app.hwnd_popup(), &state, POINT { x, y });
-                        } else {
-                            popup::show_popup(app.hwnd_popup(), &state);
-                        }
-                    }
-                    start_hover_timer(hwnd);
-                }
+                WM_MOUSEMOVE => {}
                 WM_LBUTTONUP => {
-                    log_line("tray left click cycle");
-                    app.cycle_restaurant(1);
-                    let _ = app.load_cache_for_current();
-                    app.check_stale_date_and_refresh();
-                    app.maybe_refresh_on_selection();
-                    if popup_is_visible(app.hwnd_popup()) {
+                    log_line("tray left click toggle popup");
+                    let popup_hwnd = app.hwnd_popup();
+                    if popup_is_visible(popup_hwnd) {
+                        popup::hide_popup(popup_hwnd);
+                    } else {
                         let state = app.snapshot();
-                        popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+                        if let Some(rect) = tray::tray_icon_rect(hwnd) {
+                            popup::show_popup_for_tray_icon(popup_hwnd, &state, rect);
+                        } else if let Some(cursor_point) = cursor_point() {
+                            popup::show_popup_at(popup_hwnd, &state, cursor_point);
+                        } else {
+                            popup::show_popup(popup_hwnd, &state);
+                        }
+                        let _ = SetForegroundWindow(popup_hwnd);
                     }
                 }
                 WM_RBUTTONUP => {}
                 WM_CONTEXTMENU => {
                     log_line("tray context menu");
                     popup::hide_popup(app.hwnd_popup());
-                    stop_hover_timer(hwnd);
                     app.set_context_menu_open(true);
                     let state = app.snapshot();
                     tray::show_context_menu(hwnd, &state);
@@ -281,8 +242,65 @@ pub unsafe extern "system" fn popup_wndproc(
             LRESULT(0)
         }
         WM_KEYDOWN => {
-            if wparam.0 as u32 == 0x1B {
-                popup::hide_popup(hwnd);
+            let app = app_from_hwnd(hwnd);
+            if app.is_null() {
+                return LRESULT(0);
+            }
+            let app = &*(app);
+            let key = wparam.0 as u32;
+            match key {
+                0x1B => {
+                    popup::hide_popup(hwnd);
+                }
+                0x25 | 0x41 => {
+                    app.cycle_restaurant(-1);
+                    let _ = app.load_cache_for_current();
+                    app.check_stale_date_and_refresh();
+                    app.maybe_refresh_on_selection();
+                    let state = app.snapshot();
+                    popup::resize_popup_keep_position(hwnd, &state);
+                }
+                0x27 | 0x44 => {
+                    app.cycle_restaurant(1);
+                    let _ = app.load_cache_for_current();
+                    app.check_stale_date_and_refresh();
+                    app.maybe_refresh_on_selection();
+                    let state = app.snapshot();
+                    popup::resize_popup_keep_position(hwnd, &state);
+                }
+                _ => {}
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            let app = app_from_hwnd(hwnd);
+            if app.is_null() {
+                return LRESULT(0);
+            }
+            let app = &*(app);
+            let x = (lparam.0 as u32 & 0xFFFF) as i16 as i32;
+            let y = ((lparam.0 as u32 >> 16) & 0xFFFF) as i16 as i32;
+            if let Some(action) = popup::header_button_at(hwnd, x, y) {
+                match action {
+                    popup::HeaderButtonAction::Prev => {
+                        app.cycle_restaurant(-1);
+                        let _ = app.load_cache_for_current();
+                        app.check_stale_date_and_refresh();
+                        app.maybe_refresh_on_selection();
+                    }
+                    popup::HeaderButtonAction::Next => {
+                        app.cycle_restaurant(1);
+                        let _ = app.load_cache_for_current();
+                        app.check_stale_date_and_refresh();
+                        app.maybe_refresh_on_selection();
+                    }
+                    popup::HeaderButtonAction::Close => {
+                        popup::hide_popup(hwnd);
+                        return LRESULT(0);
+                    }
+                }
+                let state = app.snapshot();
+                popup::resize_popup_keep_position(hwnd, &state);
             }
             LRESULT(0)
         }
@@ -296,7 +314,27 @@ pub unsafe extern "system" fn popup_wndproc(
             }
             LRESULT(0)
         }
-        WM_MOUSEWHEEL => LRESULT(0),
+        WM_MOUSEWHEEL => {
+            let app = app_from_hwnd(hwnd);
+            if app.is_null() {
+                return LRESULT(0);
+            }
+            let app = &*(app);
+            let delta = ((wparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            if delta > 0 {
+                app.cycle_restaurant(-1);
+            } else if delta < 0 {
+                app.cycle_restaurant(1);
+            } else {
+                return LRESULT(0);
+            }
+            let _ = app.load_cache_for_current();
+            app.check_stale_date_and_refresh();
+            app.maybe_refresh_on_selection();
+            let state = app.snapshot();
+            popup::resize_popup_keep_position(hwnd, &state);
+            LRESULT(0)
+        }
         WM_DESTROY => LRESULT(0),
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }

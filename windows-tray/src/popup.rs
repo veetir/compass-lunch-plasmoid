@@ -4,7 +4,7 @@ use crate::format::{
     text_for, PriceGroups,
 };
 use crate::model::TodayMenu;
-use crate::restaurant::Provider;
+use crate::restaurant::{available_restaurants, Provider};
 use crate::util::to_wstring;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
@@ -15,22 +15,43 @@ use windows::Win32::Graphics::Gdi::{
     MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetCursorPos, GetWindowRect, SetWindowPos, ShowWindow, HWND_TOPMOST, SW_HIDE,
-    SWP_NOACTIVATE, SWP_SHOWWINDOW,
+    GetClientRect, GetCursorPos, GetWindowRect, SetWindowPos, ShowWindow, HWND_TOPMOST,
+    SWP_SHOWWINDOW, SW_HIDE,
 };
 
 const PADDING_X: i32 = 12;
 const PADDING_Y: i32 = 10;
 const LINE_GAP: i32 = 2;
 const ANCHOR_GAP: i32 = 10;
+const POPUP_WIDTH: i32 = 700;
+const HEADER_HEIGHT: i32 = 46;
+const HEADER_BUTTON_SIZE: i32 = 30;
+const HEADER_BUTTON_GAP: i32 = 8;
 const LOADING_HINT_DELAY_MS: i64 = 250;
 
 #[derive(Debug, Clone)]
 enum Line {
     Heading(String),
     Text(String),
-    TextWithSuffixSegments { main: String, segments: Vec<(String, bool)> },
+    TextWithSuffixSegments {
+        main: String,
+        segments: Vec<(String, bool)>,
+    },
     Spacer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderButtonAction {
+    Prev,
+    Next,
+    Close,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HeaderLayout {
+    prev: RECT,
+    next: RECT,
+    close: RECT,
 }
 
 pub fn toggle_popup(hwnd: HWND, state: &AppState) {
@@ -49,15 +70,7 @@ pub fn show_popup(hwnd: HWND, state: &AppState) {
         let mut cursor = POINT::default();
         let _ = GetCursorPos(&mut cursor);
         let (x, y) = position_near_point(width, height, cursor);
-        let _ = SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            x,
-            y,
-            width,
-            height,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW,
-        );
+        let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
         InvalidateRect(hwnd, None, true);
     }
 }
@@ -66,15 +79,7 @@ pub fn show_popup_at(hwnd: HWND, state: &AppState, anchor: POINT) {
     unsafe {
         let (width, height) = desired_size(hwnd, state);
         let (x, y) = position_near_point(width, height, anchor);
-        let _ = SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            x,
-            y,
-            width,
-            height,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW,
-        );
+        let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
         InvalidateRect(hwnd, None, true);
     }
 }
@@ -83,15 +88,7 @@ pub fn show_popup_for_tray_icon(hwnd: HWND, state: &AppState, tray_rect: RECT) {
     unsafe {
         let (width, height) = desired_size(hwnd, state);
         let (x, y) = position_near_tray_rect(width, height, tray_rect);
-        let _ = SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            x,
-            y,
-            width,
-            height,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW,
-        );
+        let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
         InvalidateRect(hwnd, None, true);
     }
 }
@@ -109,15 +106,7 @@ pub fn resize_popup_keep_position(hwnd: HWND, state: &AppState) {
             y: rect.bottom,
         };
         let (x, y) = position_near_point(width, height, anchor);
-        let _ = SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            x,
-            y,
-            width,
-            height,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW,
-        );
+        let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
         InvalidateRect(hwnd, None, true);
     }
 }
@@ -125,6 +114,27 @@ pub fn resize_popup_keep_position(hwnd: HWND, state: &AppState) {
 pub fn hide_popup(hwnd: HWND) {
     unsafe {
         ShowWindow(hwnd, SW_HIDE);
+    }
+}
+
+pub fn header_button_at(hwnd: HWND, x: i32, y: i32) -> Option<HeaderButtonAction> {
+    unsafe {
+        let mut rect = RECT::default();
+        if GetClientRect(hwnd, &mut rect).is_err() {
+            return None;
+        }
+        let width = rect.right - rect.left;
+        let layout = header_layout(width);
+        if point_in_rect(&layout.prev, x, y) {
+            return Some(HeaderButtonAction::Prev);
+        }
+        if point_in_rect(&layout.next, x, y) {
+            return Some(HeaderButtonAction::Next);
+        }
+        if point_in_rect(&layout.close, x, y) {
+            return Some(HeaderButtonAction::Close);
+        }
+        None
     }
 }
 
@@ -138,7 +148,9 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
 
         let mut rect = RECT::default();
         let _ = GetClientRect(hwnd, &mut rect);
-        let (bg_color, text_color, suffix_color) = theme_colors(&state.settings.theme);
+        let width = rect.right - rect.left;
+        let (bg_color, text_color, suffix_color, header_bg_color, button_bg_color, divider_color) =
+            theme_colors(&state.settings.theme);
         let brush = CreateSolidBrush(bg_color);
         FillRect(hdc, &rect, brush);
         DeleteObject(brush);
@@ -150,37 +162,110 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
         let lines = build_lines(state);
         let metrics = text_metrics(hdc, normal_font);
         let line_height = metrics.tmHeight as i32 + LINE_GAP;
+        let content_width = (width - PADDING_X * 2).max(40);
 
-        let mut y = PADDING_Y;
+        let header_rect = RECT {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.top + HEADER_HEIGHT,
+        };
+        let header_brush = CreateSolidBrush(header_bg_color);
+        FillRect(hdc, &header_rect, header_brush);
+        DeleteObject(header_brush);
+
+        let layout = header_layout(width);
+        draw_header_button(
+            hdc,
+            &layout.prev,
+            "<",
+            button_bg_color,
+            text_color,
+            normal_font,
+        );
+        draw_header_button(
+            hdc,
+            &layout.next,
+            ">",
+            button_bg_color,
+            text_color,
+            normal_font,
+        );
+        draw_header_button(
+            hdc,
+            &layout.close,
+            "X",
+            button_bg_color,
+            text_color,
+            normal_font,
+        );
+
+        SelectObject(hdc, bold_font);
+        SetTextColor(hdc, text_color);
+        let title = fit_text_to_width(
+            hdc,
+            &header_title(state),
+            (layout.close.left - layout.next.right - 24).max(40),
+        );
+        let title_width = text_width(hdc, &title);
+        let title_x = ((width - title_width) / 2).max(layout.next.right + 12);
+        let title_y = header_rect.top + (HEADER_HEIGHT - metrics.tmHeight as i32) / 2 - 1;
+        draw_text_line(hdc, &title, title_x, title_y);
+
+        let divider_rect = RECT {
+            left: rect.left,
+            top: header_rect.bottom - 1,
+            right: rect.right,
+            bottom: header_rect.bottom,
+        };
+        let divider_brush = CreateSolidBrush(divider_color);
+        FillRect(hdc, &divider_rect, divider_brush);
+        DeleteObject(divider_brush);
+
+        let mut y = HEADER_HEIGHT + PADDING_Y;
         for line in lines {
             match line {
                 Line::Heading(text) => {
                     SelectObject(hdc, bold_font);
                     SetTextColor(hdc, text_color);
-                    draw_text_line(hdc, &text, PADDING_X, y);
+                    let clipped = fit_text_to_width(hdc, &text, content_width);
+                    draw_text_line(hdc, &clipped, PADDING_X, y);
                     y += line_height;
                 }
                 Line::Text(text) => {
                     SelectObject(hdc, normal_font);
                     SetTextColor(hdc, text_color);
-                    draw_text_line(hdc, &text, PADDING_X, y);
+                    let clipped = fit_text_to_width(hdc, &text, content_width);
+                    draw_text_line(hdc, &clipped, PADDING_X, y);
                     y += line_height;
                 }
                 Line::TextWithSuffixSegments { main, segments } => {
                     SelectObject(hdc, normal_font);
                     SetTextColor(hdc, text_color);
-                    let main_width = text_width(hdc, &main);
-                    draw_text_line(hdc, &main, PADDING_X, y);
+                    let mut suffix_width = 0;
+                    for (segment, bold) in &segments {
+                        let font = if *bold { small_bold_font } else { small_font };
+                        SelectObject(hdc, font);
+                        suffix_width += text_width(hdc, segment);
+                    }
+                    let max_main = (content_width - suffix_width - 4).max(24);
+                    SelectObject(hdc, normal_font);
+                    let clipped_main = fit_text_to_width(hdc, &main, max_main);
+                    let main_width = text_width(hdc, &clipped_main);
+                    draw_text_line(hdc, &clipped_main, PADDING_X, y);
                     if !segments.is_empty() {
-                        draw_text_segments(
-                            hdc,
-                            &segments,
-                            PADDING_X + main_width + 4,
-                            y + 1,
-                            small_font,
-                            small_bold_font,
-                            suffix_color,
-                        );
+                        let suffix_x = PADDING_X + main_width + 4;
+                        if suffix_x < (PADDING_X + content_width) {
+                            draw_text_segments(
+                                hdc,
+                                &segments,
+                                suffix_x,
+                                y + 1,
+                                small_font,
+                                small_bold_font,
+                                suffix_color,
+                            );
+                        }
                     }
                     y += line_height;
                 }
@@ -230,6 +315,95 @@ fn draw_text_line(hdc: HDC, text: &str, x: i32, y: i32) {
     }
 }
 
+fn fit_text_to_width(hdc: HDC, text: &str, max_width: i32) -> String {
+    let clean = normalize_text(text);
+    if clean.is_empty() || max_width <= 0 {
+        return String::new();
+    }
+    if text_width(hdc, &clean) <= max_width {
+        return clean;
+    }
+
+    let ellipsis = "...";
+    let ellipsis_width = text_width(hdc, ellipsis);
+    if ellipsis_width >= max_width {
+        return ellipsis.to_string();
+    }
+
+    let mut out = String::new();
+    for ch in clean.chars() {
+        let mut candidate = out.clone();
+        candidate.push(ch);
+        candidate.push_str(ellipsis);
+        if text_width(hdc, &candidate) > max_width {
+            break;
+        }
+        out.push(ch);
+    }
+
+    let mut trimmed = out.trim_end().to_string();
+    trimmed.push_str(ellipsis);
+    trimmed
+}
+
+fn draw_header_button(
+    hdc: HDC,
+    rect: &RECT,
+    label: &str,
+    bg_color: COLORREF,
+    text_color: COLORREF,
+    font: HFONT,
+) {
+    unsafe {
+        let brush = CreateSolidBrush(bg_color);
+        FillRect(hdc, rect, brush);
+        DeleteObject(brush);
+        SelectObject(hdc, font);
+        SetTextColor(hdc, text_color);
+    }
+    let label_width = text_width(hdc, label);
+    let metrics = text_metrics(hdc, font);
+    let x = rect.left + ((rect.right - rect.left - label_width) / 2).max(0);
+    let y = rect.top + ((rect.bottom - rect.top - metrics.tmHeight as i32) / 2).max(0);
+    draw_text_line(hdc, label, x, y);
+}
+
+fn header_layout(width: i32) -> HeaderLayout {
+    let top = (HEADER_HEIGHT - HEADER_BUTTON_SIZE) / 2;
+    let prev = RECT {
+        left: PADDING_X,
+        top,
+        right: PADDING_X + HEADER_BUTTON_SIZE,
+        bottom: top + HEADER_BUTTON_SIZE,
+    };
+    let next = RECT {
+        left: prev.right + HEADER_BUTTON_GAP,
+        top,
+        right: prev.right + HEADER_BUTTON_GAP + HEADER_BUTTON_SIZE,
+        bottom: top + HEADER_BUTTON_SIZE,
+    };
+    let close = RECT {
+        left: width - PADDING_X - HEADER_BUTTON_SIZE,
+        top,
+        right: width - PADDING_X,
+        bottom: top + HEADER_BUTTON_SIZE,
+    };
+    HeaderLayout { prev, next, close }
+}
+
+fn header_title(state: &AppState) -> String {
+    let list = available_restaurants(state.settings.enable_antell_restaurants);
+    if list.is_empty() {
+        return "Compass Lunch".to_string();
+    }
+
+    let index = list
+        .iter()
+        .position(|entry| entry.code == state.settings.restaurant_code)
+        .unwrap_or(0);
+    format!("{} ({}/{})", list[index].name, index + 1, list.len())
+}
+
 fn text_metrics(hdc: HDC, font: HFONT) -> TEXTMETRICW {
     unsafe {
         let old = SelectObject(hdc, font);
@@ -259,47 +433,14 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
         let lines = build_lines(state);
         let metrics = text_metrics(hdc, normal_font);
         let line_height = metrics.tmHeight as i32 + LINE_GAP;
-
-        let mut width = 240;
-        for line in &lines {
-            let w = match line {
-                Line::Heading(text) => {
-                    SelectObject(hdc, bold_font);
-                    text_width(hdc, text)
-                }
-                Line::Text(text) => {
-                    SelectObject(hdc, normal_font);
-                    text_width(hdc, text)
-                }
-                Line::TextWithSuffixSegments { main, segments } => {
-                    SelectObject(hdc, normal_font);
-                    let main_width = text_width(hdc, main);
-                    let mut suffix_width = 0;
-                    for (segment, bold) in segments {
-                        let font = if *bold { small_bold_font } else { small_font };
-                        SelectObject(hdc, font);
-                        suffix_width += text_width(hdc, segment);
-                    }
-                    if suffix_width > 0 {
-                        suffix_width += 4;
-                    }
-                    main_width + suffix_width
-                }
-                Line::Spacer => 0,
-            };
-            if w > width {
-                width = w;
-            }
-        }
-
-        let height = (lines.len() as i32 * line_height) + PADDING_Y * 2;
+        let height = HEADER_HEIGHT + (lines.len() as i32 * line_height) + PADDING_Y * 2;
         DeleteObject(normal_font);
         DeleteObject(bold_font);
         DeleteObject(small_font);
         DeleteObject(small_bold_font);
         windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
 
-        (width + PADDING_X * 2, height)
+        (POPUP_WIDTH, height.max(HEADER_HEIGHT + 120))
     }
 }
 
@@ -558,7 +699,11 @@ fn append_menus(
                 continue;
             }
             let (main, suffix) = split_component_suffix(&component);
-            let main_text = if main.is_empty() { component.clone() } else { main };
+            let main_text = if main.is_empty() {
+                component.clone()
+            } else {
+                main
+            };
             if !show_allergens {
                 lines.push(Line::Text(format!("▸ {}", main_text)));
             } else if !suffix.is_empty() {
@@ -638,27 +783,43 @@ fn now_epoch_ms() -> i64 {
         .unwrap_or(0)
 }
 
-fn theme_colors(theme: &str) -> (COLORREF, COLORREF, COLORREF) {
+fn point_in_rect(rect: &RECT, x: i32, y: i32) -> bool {
+    x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+}
+
+fn theme_colors(theme: &str) -> (COLORREF, COLORREF, COLORREF, COLORREF, COLORREF, COLORREF) {
     match theme {
         "light" => (
             COLORREF(0x00FFFFFF),
             COLORREF(0x00000000),
             COLORREF(0x00808080),
+            COLORREF(0x00F3F3F3),
+            COLORREF(0x00DDDDDD),
+            COLORREF(0x00C9C9C9),
         ),
         "blue" => (
             COLORREF(0x00562401),
             COLORREF(0x00FFFFFF),
             COLORREF(0x00E7C7A7),
+            COLORREF(0x00733809),
+            COLORREF(0x00804A1A),
+            COLORREF(0x00834D1F),
         ),
         "green" => (
             COLORREF(0x00000000),
             COLORREF(0x0000D000),
             COLORREF(0x00009000),
+            COLORREF(0x000B1A0B),
+            COLORREF(0x00142D14),
+            COLORREF(0x00142D14),
         ),
         _ => (
             COLORREF(0x00000000),
             COLORREF(0x00FFFFFF),
             COLORREF(0x00B0B0B0),
+            COLORREF(0x00101010),
+            COLORREF(0x00202020),
+            COLORREF(0x00202020),
         ),
     }
 }
