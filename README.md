@@ -64,9 +64,11 @@ See [Releases](https://github.com/veetir/compass-lunch-plasmoid/releases) for
 exe downloads.
 
 ### Features
-* Cycle between restaurants by clicking
-* Run at startup 
-* Dark/light mode
-* Togglable allergens & prices
+- Left-click tray icon to open/close the widget
+- Navigate restaurants with header buttons, mouse wheel, or `Left/Right` (`A`/`D`)
+- Toggle allergens, diet highlights, and price groups
+- Themes: dark, light, blue, green
+- Manual/automatic refresh with cache fallback
+- Run at startup
 
-![Compass Lunch screenshot](windows-tray/assets/windows.jpg)
+![Compass Lunch screenshot](windows-tray/assets/windows.png)
