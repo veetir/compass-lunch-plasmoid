@@ -15,7 +15,8 @@ Item {
         { code: "0437", fallbackName: "Snellmania", provider: "compass" },
         { code: "0439", fallbackName: "Tietoteknia", provider: "compass" },
         { code: "0436", fallbackName: "Canthia", provider: "compass" },
-        { code: "snellari-rss", fallbackName: "Cafe Snellari", provider: "compass-rss", rssCostNumber: "4370", rssUrlBase: "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/cafe-snellari/" }
+        { code: "snellari-rss", fallbackName: "Cafe Snellari", provider: "compass-rss", rssCostNumber: "4370", rssUrlBase: "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/cafe-snellari/" },
+        { code: "huomen-bioteknia", fallbackName: "Hyvä Huomen Bioteknia", provider: "huomen-json", huomenApiBase: "https://europe-west1-luncher-7cf76.cloudfunctions.net/api/v1/week/a96b7ccf-2c3d-432a-8504-971dbb6d55d3/active", huomenUrlBase: "https://hyvahuomen.fi/bioteknia/" }
     ]
     property var antellRestaurantCatalog: [
         { code: "antell-highway", fallbackName: "Antell Highway", provider: "antell", antellSlug: "highway", antellUrlBase: "https://antell.fi/lounas/kuopio/highway/" },
@@ -450,6 +451,101 @@ Item {
         return components
     }
 
+    function localizedField(value) {
+        if (value === null || value === undefined) {
+            return ""
+        }
+
+        var primitiveType = typeof value
+        if (primitiveType === "string" || primitiveType === "number" || primitiveType === "boolean") {
+            return MenuFormatter.normalizeText(value)
+        }
+
+        if (primitiveType !== "object") {
+            return ""
+        }
+
+        var preferredKeys = [configLanguage, "fi", "en"]
+        for (var i = 0; i < preferredKeys.length; i++) {
+            var key = preferredKeys[i]
+            if (!Object.prototype.hasOwnProperty.call(value, key)) {
+                continue
+            }
+            var candidate = MenuFormatter.normalizeText(value[key])
+            if (candidate) {
+                return candidate
+            }
+        }
+
+        for (var dynamicKey in value) {
+            if (!Object.prototype.hasOwnProperty.call(value, dynamicKey)) {
+                continue
+            }
+            var fallback = MenuFormatter.normalizeText(value[dynamicKey])
+            if (fallback) {
+                return fallback
+            }
+        }
+
+        return ""
+    }
+
+    function normalizeHuomenAllergenToken(token) {
+        var clean = MenuFormatter.normalizeText(token)
+        if (!clean) {
+            return ""
+        }
+        if (clean === "*") {
+            return "*"
+        }
+
+        var upper = clean.toUpperCase()
+        if (upper === "VEG") {
+            return "Veg"
+        }
+        if (/^[A-Z]{1,8}$/.test(upper)) {
+            return upper
+        }
+
+        return clean
+    }
+
+    function huomenLunchLine(lunch) {
+        var title = localizedField(lunch && lunch.title)
+        if (!title) {
+            return ""
+        }
+
+        var description = localizedField(lunch && lunch.description)
+        var line = title
+        if (description && description !== title) {
+            line += " - " + description
+        }
+
+        var allergens = []
+        var seenAllergens = {}
+        var rawAllergens = Array.isArray(lunch && lunch.allergens) ? lunch.allergens : []
+        for (var i = 0; i < rawAllergens.length; i++) {
+            var rawToken = localizedField(rawAllergens[i] && rawAllergens[i].abbreviation)
+            var token = normalizeHuomenAllergenToken(rawToken)
+            if (!token) {
+                continue
+            }
+            var key = token.toUpperCase()
+            if (seenAllergens[key]) {
+                continue
+            }
+            seenAllergens[key] = true
+            allergens.push(token)
+        }
+
+        if (allergens.length > 0) {
+            line += " (" + allergens.join(", ") + ")"
+        }
+
+        return MenuFormatter.normalizeText(line)
+    }
+
     function parseAntellMenuDateIso(menuDateText) {
         var clean = MenuFormatter.normalizeText(menuDateText)
         if (!clean) {
@@ -519,6 +615,31 @@ Item {
         }
 
         var components = Array.isArray(rawPayload.components) ? rawPayload.components.slice(0) : []
+        return {
+            dateIso: menuDate,
+            lunchTime: "",
+            menus: components.length > 0
+                ? [{
+                    sortOrder: 1,
+                    name: configLanguage === "en" ? "Lunch" : "Lounas",
+                    price: "",
+                    components: components
+                }]
+                : []
+        }
+    }
+
+    function normalizeHuomenTodayMenu(rawPayload) {
+        if (!rawPayload || rawPayload.provider !== "huomen-json" || !rawPayload.providerDateValid) {
+            return null
+        }
+
+        var menuDate = MenuFormatter.normalizeText(rawPayload.menuDateIso)
+        if (!menuDate) {
+            return null
+        }
+
+        var components = Array.isArray(rawPayload.lunchLines) ? rawPayload.lunchLines.slice(0) : []
         return {
             dateIso: menuDate,
             lunchTime: "",
@@ -621,6 +742,67 @@ Item {
             providerDateValid: !!isDateToday,
             restaurantName: name,
             restaurantUrl: url
+        }
+    }
+
+    function parseHuomenPayload(code, jsonText) {
+        var parsed = null
+        try {
+            parsed = JSON.parse(jsonText)
+        } catch (e) {
+            return { error: "Invalid JSON payload" }
+        }
+
+        if (!parsed || parsed.success === false || !parsed.data || !parsed.data.week || !Array.isArray(parsed.data.week.days)) {
+            return { error: MenuFormatter.normalizeText(parsed && parsed.message) || "Missing week.days in Huomen payload" }
+        }
+
+        var entry = restaurantEntryForCode(code)
+        var data = parsed.data
+        var expectedIso = todayIso()
+        var dayMatch = null
+        var days = data.week.days
+
+        for (var i = 0; i < days.length; i++) {
+            var day = days[i]
+            if (MenuFormatter.normalizeText(day && day.dateString) === expectedIso) {
+                dayMatch = day
+                break
+            }
+        }
+
+        var lunchLines = []
+        if (dayMatch && !dayMatch.isClosed) {
+            var lunches = Array.isArray(dayMatch.lunches) ? dayMatch.lunches : []
+            for (var j = 0; j < lunches.length; j++) {
+                var line = huomenLunchLine(lunches[j])
+                if (line) {
+                    lunchLines.push(line)
+                }
+            }
+        }
+
+        var providerDateValid = !!dayMatch
+        var menuDateIso = providerDateValid ? expectedIso : ""
+        var restaurantName = localizedField(data.location && data.location.name)
+            || (entry ? String(entry.fallbackName || "Huomen Lunch") : "Huomen Lunch")
+        var restaurantUrl = entry && entry.huomenUrlBase ? String(entry.huomenUrlBase) : ""
+        var rawPayload = {
+            provider: "huomen-json",
+            menuDateIso: menuDateIso,
+            providerDateValid: providerDateValid,
+            lunchLines: lunchLines,
+            restaurantName: restaurantName,
+            restaurantUrl: restaurantUrl
+        }
+
+        return {
+            rawPayload: rawPayload,
+            todayMenu: normalizeHuomenTodayMenu(rawPayload),
+            menuDateIso: menuDateIso,
+            providerDateValid: providerDateValid,
+            restaurantName: restaurantName,
+            restaurantUrl: restaurantUrl
         }
     }
 
@@ -781,6 +963,18 @@ Item {
             providerDateValid = compassRss.providerDateValid
             restaurantName = compassRss.restaurantName
             restaurantUrl = compassRss.restaurantUrl
+        } else if (provider === "huomen-json") {
+            var huomen = parseHuomenPayload(code, payloadText)
+            if (!huomen || huomen.error) {
+                setErrorStateForCode(code, huomen && huomen.error ? huomen.error : "Invalid Huomen payload")
+                return false
+            }
+            parsed = huomen.rawPayload
+            todayMenu = huomen.todayMenu
+            menuDateIso = huomen.menuDateIso
+            providerDateValid = huomen.providerDateValid
+            restaurantName = huomen.restaurantName
+            restaurantUrl = huomen.restaurantUrl
         } else {
             try {
                 parsed = JSON.parse(payloadText)
@@ -910,6 +1104,15 @@ Item {
                 + encodeURIComponent(rssCost)
                 + "&language="
                 + encodeURIComponent(configLanguage)
+        }
+
+        if (entry.provider === "huomen-json") {
+            var huomenApi = String(entry.huomenApiBase || "").trim()
+            if (!huomenApi) {
+                return ""
+            }
+            var separator = huomenApi.indexOf("?") >= 0 ? "&" : "?"
+            return huomenApi + separator + "language=" + encodeURIComponent(configLanguage)
         }
 
         return apiBaseUrl + "?costNumber=" + encodeURIComponent(String(code)) + "&language=" + encodeURIComponent(configLanguage)
