@@ -10,10 +10,12 @@ Item {
     id: root
 
     property string apiBaseUrl: "https://www.compass-group.fi/menuapi/feed/json"
+    property string apiRssBaseUrl: "https://www.compass-group.fi/menuapi/feed/rss/current-day"
     property var baseRestaurantCatalog: [
         { code: "0437", fallbackName: "Snellmania", provider: "compass" },
         { code: "0439", fallbackName: "Tietoteknia", provider: "compass" },
-        { code: "0436", fallbackName: "Canthia", provider: "compass" }
+        { code: "0436", fallbackName: "Canthia", provider: "compass" },
+        { code: "snellari-rss", fallbackName: "Cafe Snellari", provider: "compass-rss", rssCostNumber: "4370", rssUrlBase: "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/cafe-snellari/" }
     ]
     property var antellRestaurantCatalog: [
         { code: "antell-highway", fallbackName: "Antell Highway", provider: "antell", antellSlug: "highway", antellUrlBase: "https://antell.fi/lounas/kuopio/highway/" },
@@ -118,6 +120,11 @@ Item {
             payloadText: "",
             rawPayload: null,
             todayMenu: null,
+            menuDateIso: "",
+            providerDateValid: false,
+            isTodayFresh: false,
+            consecutiveFailures: 0,
+            nextRetryEpochMs: 0,
             restaurantName: "",
             restaurantUrl: ""
         }
@@ -197,6 +204,28 @@ Item {
         return year + "-" + month + "-" + day
     }
 
+    function todayIso() {
+        return localDateIso(new Date())
+    }
+
+    function isStateFreshForToday(state) {
+        if (!state) {
+            return false
+        }
+        return !!state.providerDateValid && MenuFormatter.normalizeText(state.menuDateIso) === todayIso()
+    }
+
+    function retryDelayMinutes(failureCount) {
+        var count = Math.max(1, Number(failureCount) || 1)
+        if (count <= 1) {
+            return 5
+        }
+        if (count === 2) {
+            return 10
+        }
+        return 15
+    }
+
     function weekdayToken(dateObj) {
         var names = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
         return names[dateObj.getDay()] || "monday"
@@ -263,13 +292,161 @@ Item {
         return sections
     }
 
+    function parseRssTagRaw(xmlText, tagName) {
+        var regex = new RegExp("<" + tagName + "(?:\\s+[^>]*)?>([\\s\\S]*?)<\\/" + tagName + ">", "i")
+        var match = String(xmlText || "").match(regex)
+        return match ? String(match[1] || "") : ""
+    }
+
+    function parseRssMenuDateIso(dateText) {
+        var clean = MenuFormatter.normalizeText(dateText)
+        if (!clean) {
+            return ""
+        }
+
+        var parts = clean.match(/(\d{1,2})[-.\/](\d{1,2})[-.\/](\d{2,4})/)
+        if (!parts) {
+            return ""
+        }
+
+        var day = Number(parts[1])
+        var month = Number(parts[2])
+        var year = Number(parts[3])
+        if (!isFinite(day) || !isFinite(month) || !isFinite(year)) {
+            return ""
+        }
+        if (year < 100) {
+            year += 2000
+        }
+        if (day < 1 || day > 31 || month < 1 || month > 12) {
+            return ""
+        }
+
+        var candidate = new Date(year, month - 1, day)
+        if (candidate.getFullYear() !== year || candidate.getMonth() !== month - 1 || candidate.getDate() !== day) {
+            return ""
+        }
+        return localDateIso(candidate)
+    }
+
+    function parseRssComponents(descriptionRaw) {
+        var decoded = decodeHtmlEntities(descriptionRaw)
+        var components = []
+        var paragraphRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi
+        var paragraphMatch
+
+        while ((paragraphMatch = paragraphRegex.exec(decoded)) !== null) {
+            var line = stripHtmlText(paragraphMatch[1])
+            if (line) {
+                components.push(line)
+            }
+        }
+
+        if (components.length === 0) {
+            var fallback = stripHtmlText(decoded)
+            if (fallback) {
+                components.push(fallback)
+            }
+        }
+
+        return components
+    }
+
+    function parseAntellMenuDateIso(menuDateText) {
+        var clean = MenuFormatter.normalizeText(menuDateText)
+        if (!clean) {
+            return ""
+        }
+
+        var parts = clean.match(/(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?/)
+        if (!parts) {
+            return ""
+        }
+
+        var day = Number(parts[1])
+        var month = Number(parts[2])
+        if (!isFinite(day) || !isFinite(month) || day < 1 || day > 31 || month < 1 || month > 12) {
+            return ""
+        }
+
+        function buildCandidate(yearNumber) {
+            var candidate = new Date(yearNumber, month - 1, day)
+            if (candidate.getFullYear() !== yearNumber || candidate.getMonth() !== month - 1 || candidate.getDate() !== day) {
+                return null
+            }
+            return candidate
+        }
+
+        if (parts[3]) {
+            var explicitYear = Number(parts[3])
+            if (!isFinite(explicitYear)) {
+                return ""
+            }
+            if (explicitYear < 100) {
+                explicitYear += 2000
+            }
+            var datedCandidate = buildCandidate(explicitYear)
+            return datedCandidate ? localDateIso(datedCandidate) : ""
+        }
+
+        var now = new Date()
+        var nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+        var years = [now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1]
+        var best = null
+        var bestDistance = Number.MAX_VALUE
+
+        for (var i = 0; i < years.length; i++) {
+            var candidate = buildCandidate(years[i])
+            if (!candidate) {
+                continue
+            }
+            var distance = Math.abs(candidate.getTime() - nowMidnight.getTime())
+            if (distance < bestDistance) {
+                bestDistance = distance
+                best = candidate
+            }
+        }
+
+        return best ? localDateIso(best) : ""
+    }
+
+    function normalizeCompassRssTodayMenu(rawPayload) {
+        if (!rawPayload || rawPayload.provider !== "compass-rss" || !rawPayload.providerDateValid) {
+            return null
+        }
+
+        var menuDate = MenuFormatter.normalizeText(rawPayload.menuDateIso)
+        if (!menuDate) {
+            return null
+        }
+
+        var components = Array.isArray(rawPayload.components) ? rawPayload.components.slice(0) : []
+        return {
+            dateIso: menuDate,
+            lunchTime: "",
+            menus: components.length > 0
+                ? [{
+                    sortOrder: 1,
+                    name: configLanguage === "en" ? "Lunch" : "Lounas",
+                    price: "",
+                    components: components
+                }]
+                : []
+        }
+    }
+
     function normalizeAntellTodayMenu(rawPayload) {
-        if (!rawPayload || rawPayload.provider !== "antell") {
+        if (!rawPayload || rawPayload.provider !== "antell" || !rawPayload.providerDateValid) {
+            return null
+        }
+
+        var menuDate = MenuFormatter.normalizeText(rawPayload.menuDateIso)
+        if (!menuDate) {
             return null
         }
 
         return {
-            dateIso: localDateIso(new Date()),
+            dateIso: menuDate,
             lunchTime: "",
             menus: parseAntellSections(rawPayload.htmlText)
         }
@@ -279,7 +456,11 @@ Item {
         var entry = restaurantEntryForCode(code)
         var payloadText = String(htmlText || "")
         var locationMatch = payloadText.match(/<div class="menu-location">([\s\S]*?)<\/div>/i)
+        var menuDateMatch = payloadText.match(/<div class="menu-date">([\s\S]*?)<\/div>/i)
         var location = stripHtmlText(locationMatch ? locationMatch[1] : "")
+        var menuDateText = stripHtmlText(menuDateMatch ? menuDateMatch[1] : "")
+        var menuDateIso = parseAntellMenuDateIso(menuDateText)
+        var isDateToday = menuDateIso && menuDateIso === todayIso()
         var fallbackName = entry ? String(entry.fallbackName || "Antell") : "Antell"
         var name = location
             ? (location.toLowerCase().indexOf("antell") === 0 ? location : ("Antell " + location))
@@ -288,6 +469,9 @@ Item {
         var rawPayload = {
             provider: "antell",
             htmlText: payloadText,
+            menuDateText: menuDateText,
+            menuDateIso: menuDateIso,
+            providerDateValid: !!isDateToday,
             restaurantName: name,
             restaurantUrl: url
         }
@@ -295,6 +479,48 @@ Item {
         return {
             rawPayload: rawPayload,
             todayMenu: normalizeAntellTodayMenu(rawPayload),
+            menuDateIso: menuDateIso,
+            providerDateValid: !!isDateToday,
+            restaurantName: name,
+            restaurantUrl: url
+        }
+    }
+
+    function parseCompassRssPayload(code, xmlText) {
+        var entry = restaurantEntryForCode(code)
+        var payloadText = String(xmlText || "")
+        var channelRaw = parseRssTagRaw(payloadText, "channel")
+        var itemMatch = String(channelRaw || payloadText).match(/<item\b[^>]*>([\s\S]*?)<\/item>/i)
+        var itemRaw = itemMatch ? String(itemMatch[1] || "") : ""
+
+        var channelTitle = stripHtmlText(parseRssTagRaw(channelRaw || payloadText, "title"))
+        var itemTitle = stripHtmlText(parseRssTagRaw(itemRaw, "title"))
+        var itemGuid = stripHtmlText(parseRssTagRaw(itemRaw, "guid"))
+        var itemLink = stripHtmlText(parseRssTagRaw(itemRaw, "link"))
+        var descriptionRaw = parseRssTagRaw(itemRaw, "description")
+
+        var menuDateIso = parseRssMenuDateIso(itemTitle) || parseRssMenuDateIso(itemGuid)
+        var isDateToday = menuDateIso && menuDateIso === todayIso()
+        var components = parseRssComponents(descriptionRaw)
+        var fallbackName = entry ? String(entry.fallbackName || "Compass Lunch") : "Compass Lunch"
+        var name = channelTitle || fallbackName
+        var url = itemLink || (entry && entry.rssUrlBase ? String(entry.rssUrlBase) : "")
+
+        var rawPayload = {
+            provider: "compass-rss",
+            xmlText: payloadText,
+            menuDateIso: menuDateIso,
+            providerDateValid: !!isDateToday,
+            components: components,
+            restaurantName: name,
+            restaurantUrl: url
+        }
+
+        return {
+            rawPayload: rawPayload,
+            todayMenu: normalizeCompassRssTodayMenu(rawPayload),
+            menuDateIso: menuDateIso,
+            providerDateValid: !!isDateToday,
             restaurantName: name,
             restaurantUrl: url
         }
@@ -332,11 +558,11 @@ Item {
             return null
         }
 
-        var todayIso = localDateIso(new Date())
+        var currentDateIso = todayIso()
 
         for (var i = 0; i < payload.MenusForDays.length; i++) {
             var day = payload.MenusForDays[i]
-            if (MenuFormatter.dayKey(day && day.Date) !== todayIso) {
+            if (MenuFormatter.dayKey(day && day.Date) !== currentDateIso) {
                 continue
             }
 
@@ -354,16 +580,20 @@ Item {
             }
 
             return {
-                dateIso: todayIso,
-                lunchTime: MenuFormatter.normalizeText(day.LunchTime),
-                menus: menus
+                todayMenu: {
+                    dateIso: currentDateIso,
+                    lunchTime: MenuFormatter.normalizeText(day.LunchTime),
+                    menus: menus
+                },
+                menuDateIso: currentDateIso,
+                providerDateValid: true
             }
         }
 
         return {
-            dateIso: todayIso,
-            lunchTime: "",
-            menus: []
+            todayMenu: null,
+            menuDateIso: "",
+            providerDateValid: false
         }
     }
 
@@ -400,12 +630,31 @@ Item {
         }
     }
 
+    function dateMismatchMessage() {
+        return "Date mismatch: expected " + todayIso()
+    }
+
     function setErrorStateForCode(code, message) {
         var current = stateFor(code)
+        if (isStateFreshForToday(current)) {
+            updateState(code, {
+                status: "ok",
+                errorMessage: "",
+                consecutiveFailures: 0,
+                nextRetryEpochMs: 0
+            })
+            return
+        }
+
+        var failureCount = (Number(current.consecutiveFailures) || 0) + 1
         updateState(code, {
             status: current.payloadText ? "stale" : "error",
-            errorMessage: message
+            errorMessage: message,
+            isTodayFresh: false,
+            consecutiveFailures: failureCount,
+            nextRetryEpochMs: Date.now() + retryDelayMinutes(failureCount) * 60 * 1000
         })
+        retryTimer.start()
     }
 
     function applyPayloadForCode(code, payloadText, fromCache, cachedTimestamp) {
@@ -413,6 +662,8 @@ Item {
         var provider = entry && entry.provider ? String(entry.provider) : "compass"
         var parsed = null
         var todayMenu = null
+        var menuDateIso = ""
+        var providerDateValid = false
         var restaurantName = ""
         var restaurantUrl = ""
 
@@ -420,8 +671,18 @@ Item {
             var antell = parseAntellPayload(code, payloadText)
             parsed = antell.rawPayload
             todayMenu = antell.todayMenu
+            menuDateIso = antell.menuDateIso
+            providerDateValid = antell.providerDateValid
             restaurantName = antell.restaurantName
             restaurantUrl = antell.restaurantUrl
+        } else if (provider === "compass-rss") {
+            var compassRss = parseCompassRssPayload(code, payloadText)
+            parsed = compassRss.rawPayload
+            todayMenu = compassRss.todayMenu
+            menuDateIso = compassRss.menuDateIso
+            providerDateValid = compassRss.providerDateValid
+            restaurantName = compassRss.restaurantName
+            restaurantUrl = compassRss.restaurantUrl
         } else {
             try {
                 parsed = JSON.parse(payloadText)
@@ -440,23 +701,58 @@ Item {
                 return false
             }
 
-            todayMenu = normalizeTodayMenu(parsed)
+            var normalizedCompass = normalizeTodayMenu(parsed)
+            if (!normalizedCompass) {
+                setErrorStateForCode(code, "Invalid menu payload")
+                return false
+            }
+
+            todayMenu = normalizedCompass.todayMenu
+            menuDateIso = normalizedCompass.menuDateIso
+            providerDateValid = normalizedCompass.providerDateValid
             restaurantName = MenuFormatter.normalizeText(parsed.RestaurantName) || "Compass Lunch"
             restaurantUrl = MenuFormatter.normalizeText(parsed.RestaurantUrl)
         }
 
         var updatedMs = fromCache ? (Number(cachedTimestamp) || 0) : Date.now()
+        var freshToday = !!providerDateValid && menuDateIso === todayIso()
+        var current = stateFor(code)
+        var failureCount = Number(current.consecutiveFailures) || 0
+
+        if (!freshToday && !fromCache) {
+            failureCount += 1
+        } else if (freshToday) {
+            failureCount = 0
+        }
+
+        var nextRetryEpochMs = Number(current.nextRetryEpochMs) || 0
+        if (freshToday) {
+            nextRetryEpochMs = 0
+        } else if (!fromCache) {
+            nextRetryEpochMs = Date.now() + retryDelayMinutes(failureCount) * 60 * 1000
+        } else if (!isFinite(nextRetryEpochMs) || nextRetryEpochMs < 0) {
+            nextRetryEpochMs = 0
+        }
 
         updateState(code, {
-            status: fromCache ? "stale" : "ok",
-            errorMessage: "",
+            status: freshToday ? "ok" : "stale",
+            errorMessage: freshToday ? "" : dateMismatchMessage(),
             lastUpdatedEpochMs: updatedMs,
             payloadText: payloadText,
             rawPayload: parsed,
             todayMenu: todayMenu,
+            menuDateIso: menuDateIso,
+            providerDateValid: !!providerDateValid,
+            isTodayFresh: freshToday,
+            consecutiveFailures: failureCount,
+            nextRetryEpochMs: nextRetryEpochMs,
             restaurantName: restaurantName,
             restaurantUrl: restaurantUrl
         })
+
+        if (!freshToday && !fromCache) {
+            retryTimer.start()
+        }
 
         if (String(code) === activeRestaurantCode) {
             syncSettingsLastUpdatedDisplay()
@@ -481,20 +777,15 @@ Item {
         }
     }
 
-    function refreshTodayMenusFromPayload() {
+    function rederiveStateFromCachedPayload() {
         var codes = restaurantCodes()
         for (var i = 0; i < codes.length; i++) {
             var code = codes[i]
             var state = stateFor(code)
-            if (!state.rawPayload) {
+            if (!state.payloadText) {
                 continue
             }
-            var refreshedMenu = state.rawPayload.provider === "antell"
-                ? normalizeAntellTodayMenu(state.rawPayload)
-                : normalizeTodayMenu(state.rawPayload)
-            updateState(code, {
-                todayMenu: refreshedMenu
-            })
+            applyPayloadForCode(code, state.payloadText, true, state.lastUpdatedEpochMs)
         }
     }
 
@@ -511,6 +802,18 @@ Item {
                 + "&print_lunch_list_day=1"
         }
 
+        if (entry.provider === "compass-rss") {
+            var rssCost = String(entry.rssCostNumber || "").trim()
+            if (!rssCost) {
+                return ""
+            }
+            return apiRssBaseUrl
+                + "?costNumber="
+                + encodeURIComponent(rssCost)
+                + "&language="
+                + encodeURIComponent(configLanguage)
+        }
+
         return apiBaseUrl + "?costNumber=" + encodeURIComponent(String(code)) + "&language=" + encodeURIComponent(configLanguage)
     }
 
@@ -520,10 +823,14 @@ Item {
         }
 
         var normalized = String(code)
+        var current = stateFor(normalized)
+        if (!manual && current.status === "loading") {
+            return
+        }
+
         requestSerialByCode[normalized] = (requestSerialByCode[normalized] || 0) + 1
         var requestSerial = requestSerialByCode[normalized]
 
-        var current = stateFor(normalized)
         if (!current.payloadText) {
             updateState(normalized, {
                 status: "loading",
@@ -573,10 +880,44 @@ Item {
         xhr.send()
     }
 
-    function refreshAllRestaurants(manual) {
+    function evaluateFreshnessAndRefresh(forceNetwork, manual) {
         var codes = restaurantCodes()
         for (var i = 0; i < codes.length; i++) {
-            fetchRestaurant(codes[i], manual)
+            var code = codes[i]
+            if (forceNetwork || manual) {
+                fetchRestaurant(code, !!manual)
+                continue
+            }
+
+            var state = stateFor(code)
+            if (!isStateFreshForToday(state)) {
+                fetchRestaurant(code, false)
+            }
+        }
+    }
+
+    function processDueRetries() {
+        var nowMs = Date.now()
+        var codes = restaurantCodes()
+        var hasPendingRetry = false
+
+        for (var i = 0; i < codes.length; i++) {
+            var code = codes[i]
+            var state = stateFor(code)
+            var dueMs = Number(state.nextRetryEpochMs) || 0
+
+            if (!dueMs || isStateFreshForToday(state)) {
+                continue
+            }
+
+            hasPendingRetry = true
+            if (dueMs <= nowMs) {
+                fetchRestaurant(code, false)
+            }
+        }
+
+        if (!hasPendingRetry) {
+            retryTimer.stop()
         }
     }
 
@@ -613,14 +954,18 @@ Item {
         var nextIdx = (idx + step + codes.length) % codes.length
         activeRestaurantCode = codes[nextIdx]
 
-        if (!stateFor(activeRestaurantCode).payloadText) {
+        if (!isStateFreshForToday(stateFor(activeRestaurantCode))) {
             fetchRestaurant(activeRestaurantCode, false)
         }
     }
 
     function tooltipMainText() {
         var state = stateFor(activeRestaurantCode)
-        return state.restaurantName || "Compass Lunch"
+        var title = state.restaurantName || "Compass Lunch"
+        if (state.status === "stale" && !state.isTodayFresh) {
+            return "[STALE] " + title
+        }
+        return title
     }
 
     function tooltipSubText() {
@@ -679,13 +1024,13 @@ Item {
         activeRestaurantCode = configRestaurantCode
         loadCacheStore()
         loadCachedPayloadsForCurrentLanguage()
-        refreshAllRestaurants(false)
+        evaluateFreshnessAndRefresh(false, false)
         syncSettingsLastUpdatedDisplay()
     }
 
     onConfigRestaurantCodeChanged: {
         activeRestaurantCode = configRestaurantCode
-        if (!stateFor(activeRestaurantCode).payloadText) {
+        if (!isStateFreshForToday(stateFor(activeRestaurantCode))) {
             fetchRestaurant(activeRestaurantCode, false)
         }
         syncSettingsLastUpdatedDisplay()
@@ -698,7 +1043,7 @@ Item {
         activeRestaurantCode = configRestaurantCode
         loadCacheStore()
         loadCachedPayloadsForCurrentLanguage()
-        refreshAllRestaurants(false)
+        evaluateFreshnessAndRefresh(false, false)
         syncSettingsLastUpdatedDisplay()
     }
 
@@ -707,7 +1052,7 @@ Item {
         activeRestaurantCode = configRestaurantCode
         loadCacheStore()
         loadCachedPayloadsForCurrentLanguage()
-        refreshAllRestaurants(false)
+        evaluateFreshnessAndRefresh(false, false)
         syncSettingsLastUpdatedDisplay()
     }
 
@@ -723,7 +1068,7 @@ Item {
         if (!initialized) {
             return
         }
-        refreshAllRestaurants(true)
+        evaluateFreshnessAndRefresh(true, true)
     }
 
     Component.onCompleted: {
@@ -737,7 +1082,15 @@ Item {
         interval: Math.max(1, root.configRefreshMinutes) * 60 * 1000
         running: root.configRefreshMinutes > 0
         repeat: true
-        onTriggered: root.refreshAllRestaurants(false)
+        onTriggered: root.evaluateFreshnessAndRefresh(false, false)
+    }
+
+    Timer {
+        id: retryTimer
+        interval: 30000
+        running: false
+        repeat: true
+        onTriggered: root.processDueRetries()
     }
 
     Timer {
@@ -745,8 +1098,8 @@ Item {
         repeat: false
         running: false
         onTriggered: {
-            root.refreshTodayMenusFromPayload()
-            root.refreshAllRestaurants(false)
+            root.rederiveStateFromCachedPayload()
+            root.evaluateFreshnessAndRefresh(false, false)
             root.scheduleMidnightTimer()
         }
     }

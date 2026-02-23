@@ -25,7 +25,8 @@ Item {
     property var baseRestaurantOptions: [
         { code: "0437", label: "Ita-Suomen yliopisto/Snellmania (0437)" },
         { code: "0439", label: "Tietoteknia (0439)" },
-        { code: "0436", label: "Ita-Suomen yliopisto/Canthia (0436)" }
+        { code: "0436", label: "Ita-Suomen yliopisto/Canthia (0436)" },
+        { code: "snellari-rss", label: "Cafe Snellari (RSS)" }
     ]
     property var antellRestaurantOptions: [
         { code: "antell-highway", label: "Antell Highway" },

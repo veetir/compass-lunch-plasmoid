@@ -64,15 +64,15 @@ function dateAndTimeLine(todayMenu, language) {
 function textFor(language, key) {
     var fi = {
         loading: "Ladataan ruokalistaa...",
-        noMenu: "Tälle päivalle ei ole lounaslistaa.",
-        stale: "Ei verkkoyhteytta. Näytetaan viimeisin tallennettu lista",
+        noMenu: "Tälle päivälle ei ole lounaslistaa.",
+        stale: "Ruokalistan päivä ei vastaa tämän päivän päivämäärää",
         fetchError: "Päivitysvirhe"
     };
 
     var en = {
         loading: "Loading menu...",
         noMenu: "No lunch menu available for today.",
-        stale: "Offline. Showing last cached menu",
+        stale: "Menu date does not match today. Waiting for a valid refresh",
         fetchError: "Fetch error"
     };
 
@@ -351,6 +351,10 @@ function highlightSuffixRich(suffix, highlightGlutenFree, highlightVeg, highligh
 function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider, hideExpensiveStudentMeals, showAllergens, highlightGlutenFree, highlightVeg, highlightLactoseFree) {
     var lines = [];
 
+    if (fetchState === "stale") {
+        lines.push("[STALE]");
+    }
+
     if (!todayMenu && fetchState === "loading") {
         lines.push(textFor(language, "loading"));
     }
@@ -399,6 +403,10 @@ function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpoc
 
 function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider, hideExpensiveStudentMeals, showAllergens, highlightGlutenFree, highlightVeg, highlightLactoseFree) {
     var lines = [];
+
+    if (fetchState === "stale") {
+        lines.push("<b>[STALE]</b>");
+    }
 
     if (!todayMenu && fetchState === "loading") {
         lines.push(escapeHtml(textFor(language, "loading")));
