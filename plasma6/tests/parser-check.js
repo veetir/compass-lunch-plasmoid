@@ -223,6 +223,302 @@ function parseAntellMeta(htmlText, nowDate) {
   };
 }
 
+function parseRssTagRaw(xmlText, tagName) {
+  const regex = new RegExp(`<${tagName}(?:\\s+[^>]*)?>([\\s\\S]*?)<\\/${tagName}>`, "i");
+  const match = String(xmlText || "").match(regex);
+  return match ? String(match[1] || "") : "";
+}
+
+function parseRssDateIso(dateText) {
+  const clean = normalizeText(dateText);
+  if (!clean) {
+    return "";
+  }
+
+  const parts = clean.match(/(\d{1,2})[-./](\d{1,2})[-./](\d{2,4})/);
+  if (!parts) {
+    return "";
+  }
+
+  const day = Number(parts[1]);
+  const month = Number(parts[2]);
+  let year = Number(parts[3]);
+  if (!Number.isFinite(day) || !Number.isFinite(month) || !Number.isFinite(year)) {
+    return "";
+  }
+  if (year < 100) {
+    year += 2000;
+  }
+  if (day < 1 || day > 31 || month < 1 || month > 12) {
+    return "";
+  }
+
+  const candidate = new Date(year, month - 1, day);
+  if (candidate.getFullYear() !== year || candidate.getMonth() !== month - 1 || candidate.getDate() !== day) {
+    return "";
+  }
+  return localDateIso(candidate);
+}
+
+function isRssAllergenToken(token) {
+  const clean = normalizeText(token).replace(/[.;:]+$/, "");
+  if (!clean) {
+    return false;
+  }
+  if (clean === "*") {
+    return true;
+  }
+  if (/^[A-Z]$/.test(clean)) {
+    return true;
+  }
+  const upper = clean.toUpperCase();
+  if (upper === "VEG" || upper === "VS" || upper === "ILM") {
+    return true;
+  }
+  return false;
+}
+
+function normalizeRssAllergenToken(token) {
+  const clean = normalizeText(token).replace(/[.;:]+$/, "");
+  if (!clean) {
+    return "";
+  }
+  if (clean === "*") {
+    return "*";
+  }
+  const upper = clean.toUpperCase();
+  if (upper === "VEG") {
+    return "Veg";
+  }
+  return upper;
+}
+
+function normalizeRssComponentLine(rawLine) {
+  const line = normalizeText(rawLine);
+  if (!line) {
+    return "";
+  }
+
+  if (/\((?:\*|[A-Za-z]{1,8})(?:\s*,\s*(?:\*|[A-Za-z]{1,8}))*\)\s*$/.test(line)) {
+    return line;
+  }
+
+  const compact = line.replace(/\s*[;,]\s*$/, "");
+  const parts = compact.split(/\s*,\s*/);
+  if (parts.length < 2) {
+    return compact;
+  }
+
+  const suffixTokens = [];
+  for (let i = parts.length - 1; i >= 0; i -= 1) {
+    const candidate = normalizeText(parts[i]);
+    if (!isRssAllergenToken(candidate)) {
+      break;
+    }
+    const normalized = normalizeRssAllergenToken(candidate);
+    if (!normalized) {
+      break;
+    }
+    suffixTokens.unshift(normalized);
+  }
+
+  if (suffixTokens.length === 0) {
+    return compact;
+  }
+
+  const mainParts = parts.slice(0, parts.length - suffixTokens.length);
+  let mainText = normalizeText(mainParts.join(", "));
+  if (!mainText) {
+    return compact;
+  }
+
+  const starMatch = mainText.match(/^(.*\S)\s*\*$/);
+  if (starMatch) {
+    mainText = normalizeText(starMatch[1]);
+    suffixTokens.unshift("*");
+  }
+
+  while (true) {
+    const trailingMatch = mainText.match(/^(.*\S)\s+([A-Za-z*]{1,4})$/);
+    if (!trailingMatch) {
+      break;
+    }
+    const trailingToken = normalizeRssAllergenToken(trailingMatch[2]);
+    if (!isRssAllergenToken(trailingMatch[2]) || !trailingToken) {
+      break;
+    }
+    mainText = normalizeText(trailingMatch[1]);
+    suffixTokens.unshift(trailingToken);
+  }
+
+  return `${mainText} (${suffixTokens.join(", ")})`;
+}
+
+function parseRssComponents(descriptionRaw) {
+  const decoded = decodeHtmlEntities(String(descriptionRaw || ""));
+  const components = [];
+  const paragraphRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi;
+  let paragraphMatch;
+
+  while ((paragraphMatch = paragraphRegex.exec(decoded)) !== null) {
+    const line = normalizeRssComponentLine(stripHtmlText(paragraphMatch[1]));
+    if (line) {
+      components.push(line);
+    }
+  }
+
+  if (components.length === 0) {
+    const fallback = normalizeRssComponentLine(stripHtmlText(decoded));
+    if (fallback) {
+      components.push(fallback);
+    }
+  }
+
+  return components;
+}
+
+function parseRssMeta(rssText, nowDate) {
+  const raw = String(rssText || "");
+  const channelRaw = parseRssTagRaw(raw, "channel");
+  const itemMatch = String(channelRaw || raw).match(/<item\b[^>]*>([\s\S]*?)<\/item>/i);
+  const itemRaw = itemMatch ? String(itemMatch[1] || "") : "";
+
+  const itemTitle = stripHtmlText(parseRssTagRaw(itemRaw, "title"));
+  const itemGuid = stripHtmlText(parseRssTagRaw(itemRaw, "guid"));
+  const itemLink = stripHtmlText(parseRssTagRaw(itemRaw, "link"));
+  const descriptionRaw = parseRssTagRaw(itemRaw, "description");
+  const menuDateIso = parseRssDateIso(itemTitle) || parseRssDateIso(itemGuid);
+  const expectedIso = localDateIso(nowDate instanceof Date ? nowDate : new Date());
+
+  return {
+    itemTitle,
+    itemGuid,
+    itemLink,
+    menuDateIso,
+    providerDateValid: !!menuDateIso && menuDateIso === expectedIso,
+    components: parseRssComponents(descriptionRaw),
+  };
+}
+
+function localizedField(value, language = "fi") {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  const primitiveType = typeof value;
+  if (primitiveType === "string" || primitiveType === "number" || primitiveType === "boolean") {
+    return normalizeText(value);
+  }
+
+  if (primitiveType !== "object") {
+    return "";
+  }
+
+  const preferredKeys = [language, "fi", "en"];
+  for (const key of preferredKeys) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      continue;
+    }
+    const candidate = normalizeText(value[key]);
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  for (const dynamicKey of Object.keys(value)) {
+    const fallback = normalizeText(value[dynamicKey]);
+    if (fallback) {
+      return fallback;
+    }
+  }
+
+  return "";
+}
+
+function normalizeHuomenAllergenToken(token) {
+  const clean = normalizeText(token);
+  if (!clean) {
+    return "";
+  }
+  if (clean === "*") {
+    return "*";
+  }
+
+  const upper = clean.toUpperCase();
+  if (upper === "VEG") {
+    return "Veg";
+  }
+  if (/^[A-Z]{1,8}$/.test(upper)) {
+    return upper;
+  }
+
+  return clean;
+}
+
+function huomenLunchLine(lunch, language = "fi") {
+  const title = localizedField(lunch && lunch.title, language);
+  if (!title) {
+    return "";
+  }
+
+  const description = localizedField(lunch && lunch.description, language);
+  let line = title;
+  if (description && description !== title) {
+    line += ` - ${description}`;
+  }
+
+  const allergens = [];
+  const seen = new Set();
+  const rawAllergens = Array.isArray(lunch && lunch.allergens) ? lunch.allergens : [];
+  for (const rawAllergen of rawAllergens) {
+    const token = normalizeHuomenAllergenToken(localizedField(rawAllergen && rawAllergen.abbreviation, language));
+    if (!token) {
+      continue;
+    }
+    const key = token.toUpperCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    allergens.push(token);
+  }
+
+  if (allergens.length > 0) {
+    line += ` (${allergens.join(", ")})`;
+  }
+
+  return normalizeText(line);
+}
+
+function parseHuomenToday(payload, targetDate, language = "fi") {
+  if (!payload || payload.success === false || !payload.data || !payload.data.week || !Array.isArray(payload.data.week.days)) {
+    return null;
+  }
+
+  const days = payload.data.week.days;
+  const dayMatch = days.find((day) => normalizeText(day && day.dateString) === targetDate) || null;
+  const providerDateValid = !!dayMatch;
+  const menuDateIso = providerDateValid ? targetDate : "";
+  const lines = [];
+
+  if (dayMatch && !dayMatch.isClosed) {
+    const lunches = Array.isArray(dayMatch.lunches) ? dayMatch.lunches : [];
+    for (const lunch of lunches) {
+      const line = huomenLunchLine(lunch, language);
+      if (line) {
+        lines.push(line);
+      }
+    }
+  }
+
+  return {
+    providerDateValid,
+    menuDateIso,
+    lines,
+    restaurantName: localizedField(payload.data.location && payload.data.location.name, language),
+  };
+}
+
 function retryDelayMinutes(failureCount) {
   const count = Math.max(1, Number(failureCount) || 1);
   if (count <= 1) {
@@ -296,6 +592,64 @@ function checkAntellFixture(name, expectedFirstTitle, expectedFirstItem, expecte
   assert(!missingMeta.providerDateValid, `${name}: missing menu-date should be invalid`);
 }
 
+function checkRssFixture(name) {
+  const rss = readTextFixture(name);
+  const todayMeta = parseRssMeta(rss, new Date(2026, 1, 23));
+  assert(todayMeta.providerDateValid, `${name}: expected valid date on 2026-02-23`);
+  assert(todayMeta.menuDateIso === "2026-02-23", `${name}: unexpected date: ${todayMeta.menuDateIso}`);
+  assert(todayMeta.itemLink.includes("cafe-snellari"), `${name}: missing restaurant link`);
+  assert(todayMeta.components.length >= 4, `${name}: expected at least 4 menu lines`);
+  assert(
+    todayMeta.components[0] === "Juustoista peruna-pinaattisosekeittoa (*, A, G, ILM, L)",
+    `${name}: unexpected first line: ${todayMeta.components[0]}`
+  );
+  assert(
+    todayMeta.components[1] === "Basilikalla ja hunajalla maustettua broileria (G, L, M)",
+    `${name}: unexpected second line: ${todayMeta.components[1]}`
+  );
+  assert(
+    todayMeta.components.some((line) => line.includes("katkarapuja")),
+    `${name}: expected katkarapuja line in components`
+  );
+
+  const staleMeta = parseRssMeta(rss, new Date(2026, 1, 24));
+  assert(!staleMeta.providerDateValid, `${name}: expected stale date on 2026-02-24`);
+
+  const noDateRss = rss
+    .replace(/#23-02-2026/i, "#no-date")
+    .replace(/Maanantai,\s*23-02-2026/i, "Maanantai");
+  const missingDateMeta = parseRssMeta(noDateRss, new Date(2026, 1, 23));
+  assert(missingDateMeta.menuDateIso === "", `${name}: expected empty date when RSS has no date`);
+  assert(!missingDateMeta.providerDateValid, `${name}: expected invalid providerDateValid when date is missing`);
+}
+
+function checkHuomenFixture(name) {
+  const payload = readFixture(name);
+  const today = parseHuomenToday(payload, "2026-02-23", "fi");
+  assert(today, `${name}: parseHuomenToday returned null`);
+  assert(today.providerDateValid, `${name}: expected providerDateValid on 2026-02-23`);
+  assert(today.menuDateIso === "2026-02-23", `${name}: unexpected menuDateIso: ${today.menuDateIso}`);
+  assert(today.restaurantName === "Hyvä Huomen Bioteknia", `${name}: unexpected location name: ${today.restaurantName}`);
+  assert(today.lines.length === 3, `${name}: expected 3 lunches for 2026-02-23, got ${today.lines.length}`);
+  assert(
+    today.lines[0] === "Kermainen juuresosekeitto (G, L)",
+    `${name}: unexpected first lunch line: ${today.lines[0]}`
+  );
+  assert(
+    today.lines[1].includes("(G, L)"),
+    `${name}: expected allergens in second lunch line: ${today.lines[1]}`
+  );
+  assert(
+    today.lines[2] === "Kasvispihvejä, tsatsikia (L)",
+    `${name}: unexpected third lunch line: ${today.lines[2]}`
+  );
+
+  const stale = parseHuomenToday(payload, "2026-03-03", "fi");
+  assert(stale && !stale.providerDateValid, `${name}: expected stale for missing date`);
+  assert(stale.menuDateIso === "", `${name}: expected empty menuDateIso for missing date`);
+  assert(stale.lines.length === 0, `${name}: expected no lines for missing date`);
+}
+
 function checkRetryDelays() {
   assert(retryDelayMinutes(1) === 5, "retry delay for first failure should be 5");
   assert(retryDelayMinutes(2) === 10, "retry delay for second failure should be 10");
@@ -318,8 +672,10 @@ function main() {
     "Perinteiset lihapyörykät mummonkastikkeella(G oma)",
     3
   );
+  checkRssFixture("snellari.rss");
+  checkHuomenFixture("huomen.json");
   checkRetryDelays();
-  process.stdout.write("Parser checks passed for Compass and Antell freshness rules\n");
+  process.stdout.write("Parser checks passed for Compass, Antell, RSS and Huomen freshness rules\n");
 }
 
 main();

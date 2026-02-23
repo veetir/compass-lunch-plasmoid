@@ -11,16 +11,17 @@ PlasmoidItem {
     id: root
 
     property string apiBaseUrl: "https://www.compass-group.fi/menuapi/feed/json"
-    property var baseRestaurantCatalog: [
+    property string apiRssBaseUrl: "https://www.compass-group.fi/menuapi/feed/rss/current-day"
+    property var allRestaurantCatalog: [
         { code: "0437", fallbackName: "Snellmania", provider: "compass" },
+        { code: "snellari-rss", fallbackName: "Cafe Snellari", provider: "compass-rss", rssCostNumber: "4370", rssUrlBase: "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/cafe-snellari/" },
+        { code: "0436", fallbackName: "Canthia", provider: "compass" },
         { code: "0439", fallbackName: "Tietoteknia", provider: "compass" },
-        { code: "0436", fallbackName: "Canthia", provider: "compass" }
-    ]
-    property var antellRestaurantCatalog: [
+        { code: "antell-round", fallbackName: "Antell Round", provider: "antell", antellSlug: "round", antellUrlBase: "https://antell.fi/lounas/kuopio/round/" },
         { code: "antell-highway", fallbackName: "Antell Highway", provider: "antell", antellSlug: "highway", antellUrlBase: "https://antell.fi/lounas/kuopio/highway/" },
-        { code: "antell-round", fallbackName: "Antell Round", provider: "antell", antellSlug: "round", antellUrlBase: "https://antell.fi/lounas/kuopio/round/" }
+        { code: "huomen-bioteknia", fallbackName: "Hyvä Huomen Bioteknia", provider: "huomen-json", huomenApiBase: "https://europe-west1-luncher-7cf76.cloudfunctions.net/api/v1/week/a96b7ccf-2c3d-432a-8504-971dbb6d55d3/active", huomenUrlBase: "https://hyvahuomen.fi/bioteknia/" }
     ]
-    property var restaurantCatalog: configEnableAntellRestaurants ? baseRestaurantCatalog.concat(antellRestaurantCatalog) : baseRestaurantCatalog
+    property var restaurantCatalog: filteredRestaurantCatalog(configEnabledRestaurantCodes)
 
     property var restaurantStates: ({})
     property var requestSerialByCode: ({})
@@ -31,15 +32,27 @@ PlasmoidItem {
 
     property string activeRestaurantCode: "0437"
 
+    property string configEnabledRestaurantCodes: {
+        var raw = String(Plasmoid.configuration.enabledRestaurantCodes || "").trim()
+        if (raw.length > 0) {
+            return raw
+        }
+
+        var defaults = []
+        for (var i = 0; i < allRestaurantCatalog.length; i++) {
+            defaults.push(String(allRestaurantCatalog[i].code))
+        }
+        return defaults.join(",")
+    }
     property string configRestaurantCode: {
-        var raw = String(Plasmoid.configuration.restaurantCode || Plasmoid.configuration.costNumber || "0437").trim()
-        return isKnownRestaurant(raw) ? raw : "0437"
+        var fallback = defaultRestaurantCode()
+        var raw = String(Plasmoid.configuration.restaurantCode || Plasmoid.configuration.costNumber || fallback).trim()
+        return isKnownRestaurant(raw) ? raw : fallback
     }
     property string configLanguage: {
         var raw = String(Plasmoid.configuration.language || "fi").toLowerCase()
         return raw === "en" ? "en" : "fi"
     }
-    property bool configEnableAntellRestaurants: !!Plasmoid.configuration.enableAntellRestaurants
     property bool configEnableWheelCycle: Plasmoid.configuration.enableWheelCycle !== false
     property int configRefreshMinutes: {
         var raw = Number(Plasmoid.configuration.refreshMinutes)
@@ -54,6 +67,7 @@ PlasmoidItem {
     }
     property int configManualRefreshToken: Number(Plasmoid.configuration.manualRefreshToken || 0)
     property bool configShowPrices: !!Plasmoid.configuration.showPrices
+    property bool configHideExpensiveStudentMeals: !!Plasmoid.configuration.hideExpensiveStudentMeals
     property bool configShowStudentPrice: Plasmoid.configuration.showStudentPrice !== false
     property bool configShowStaffPrice: Plasmoid.configuration.showStaffPrice !== false
     property bool configShowGuestPrice: Plasmoid.configuration.showGuestPrice !== false
@@ -73,6 +87,63 @@ PlasmoidItem {
 
     function touchModel() {
         modelVersion += 1
+    }
+
+    function parseConfiguredRestaurantCodes(rawValue) {
+        var selectedMap = {}
+        var raw = String(rawValue || "")
+        if (raw.length > 0) {
+            var tokens = raw.split(",")
+            for (var i = 0; i < tokens.length; i++) {
+                var token = String(tokens[i] || "").trim()
+                if (token) {
+                    selectedMap[token] = true
+                }
+            }
+        } else {
+            for (var j = 0; j < allRestaurantCatalog.length; j++) {
+                selectedMap[String(allRestaurantCatalog[j].code)] = true
+            }
+        }
+
+        var selectedCodes = []
+        for (var k = 0; k < allRestaurantCatalog.length; k++) {
+            var code = String(allRestaurantCatalog[k].code)
+            if (selectedMap[code]) {
+                selectedCodes.push(code)
+            }
+        }
+
+        if (selectedCodes.length === 0 && allRestaurantCatalog.length > 0) {
+            selectedCodes.push(String(allRestaurantCatalog[0].code))
+        }
+
+        return selectedCodes
+    }
+
+    function filteredRestaurantCatalog(rawValue) {
+        var selectedCodes = parseConfiguredRestaurantCodes(rawValue)
+        var selectedMap = {}
+        for (var i = 0; i < selectedCodes.length; i++) {
+            selectedMap[selectedCodes[i]] = true
+        }
+
+        var filtered = []
+        for (var j = 0; j < allRestaurantCatalog.length; j++) {
+            var entry = allRestaurantCatalog[j]
+            if (selectedMap[String(entry.code)]) {
+                filtered.push(entry)
+            }
+        }
+        return filtered
+    }
+
+    function defaultRestaurantCode() {
+        var codes = restaurantCodes()
+        if (codes.length > 0) {
+            return String(codes[0])
+        }
+        return allRestaurantCatalog.length > 0 ? String(allRestaurantCatalog[0].code) : "0437"
     }
 
     function restaurantCodes() {
@@ -290,6 +361,259 @@ PlasmoidItem {
         return sections
     }
 
+    function parseRssTagRaw(xmlText, tagName) {
+        var regex = new RegExp("<" + tagName + "(?:\\s+[^>]*)?>([\\s\\S]*?)<\\/" + tagName + ">", "i")
+        var match = String(xmlText || "").match(regex)
+        return match ? String(match[1] || "") : ""
+    }
+
+    function parseRssMenuDateIso(dateText) {
+        var clean = MenuFormatter.normalizeText(dateText)
+        if (!clean) {
+            return ""
+        }
+
+        var parts = clean.match(/(\d{1,2})[-.\/](\d{1,2})[-.\/](\d{2,4})/)
+        if (!parts) {
+            return ""
+        }
+
+        var day = Number(parts[1])
+        var month = Number(parts[2])
+        var year = Number(parts[3])
+        if (!isFinite(day) || !isFinite(month) || !isFinite(year)) {
+            return ""
+        }
+        if (year < 100) {
+            year += 2000
+        }
+        if (day < 1 || day > 31 || month < 1 || month > 12) {
+            return ""
+        }
+
+        var candidate = new Date(year, month - 1, day)
+        if (candidate.getFullYear() !== year || candidate.getMonth() !== month - 1 || candidate.getDate() !== day) {
+            return ""
+        }
+        return localDateIso(candidate)
+    }
+
+    function isRssAllergenToken(token) {
+        var clean = MenuFormatter.normalizeText(token).replace(/[.;:]+$/, "")
+        if (!clean) {
+            return false
+        }
+        if (clean === "*") {
+            return true
+        }
+
+        if (/^[A-Z]$/.test(clean)) {
+            return true
+        }
+
+        var upper = clean.toUpperCase()
+        if (upper === "VEG" || upper === "VS" || upper === "ILM") {
+            return true
+        }
+
+        return false
+    }
+
+    function normalizeRssAllergenToken(token) {
+        var clean = MenuFormatter.normalizeText(token).replace(/[.;:]+$/, "")
+        if (!clean) {
+            return ""
+        }
+        if (clean === "*") {
+            return "*"
+        }
+
+        var upper = clean.toUpperCase()
+        if (upper === "VEG") {
+            return "Veg"
+        }
+        return upper
+    }
+
+    function normalizeRssComponentLine(rawLine) {
+        var line = MenuFormatter.normalizeText(rawLine)
+        if (!line) {
+            return ""
+        }
+
+        if (/\((?:\*|[A-Za-z]{1,8})(?:\s*,\s*(?:\*|[A-Za-z]{1,8}))*\)\s*$/.test(line)) {
+            return line
+        }
+
+        var compact = line.replace(/\s*[;,]\s*$/, "")
+        var parts = compact.split(/\s*,\s*/)
+        if (parts.length < 2) {
+            return compact
+        }
+
+        var suffixTokens = []
+        for (var i = parts.length - 1; i >= 0; i--) {
+            var candidate = MenuFormatter.normalizeText(parts[i])
+            if (!isRssAllergenToken(candidate)) {
+                break
+            }
+            var normalizedToken = normalizeRssAllergenToken(candidate)
+            if (!normalizedToken) {
+                break
+            }
+            suffixTokens.unshift(normalizedToken)
+        }
+
+        if (suffixTokens.length === 0) {
+            return compact
+        }
+
+        var mainParts = parts.slice(0, parts.length - suffixTokens.length)
+        var mainText = MenuFormatter.normalizeText(mainParts.join(", "))
+        if (!mainText) {
+            return compact
+        }
+
+        var starMatch = mainText.match(/^(.*\S)\s*\*$/)
+        if (starMatch) {
+            mainText = MenuFormatter.normalizeText(starMatch[1])
+            suffixTokens.unshift("*")
+        }
+
+        while (true) {
+            var trailingMatch = mainText.match(/^(.*\S)\s+([A-Za-z*]{1,4})$/)
+            if (!trailingMatch) {
+                break
+            }
+            var trailingToken = normalizeRssAllergenToken(trailingMatch[2])
+            if (!isRssAllergenToken(trailingMatch[2]) || !trailingToken) {
+                break
+            }
+            mainText = MenuFormatter.normalizeText(trailingMatch[1])
+            suffixTokens.unshift(trailingToken)
+        }
+
+        return mainText + " (" + suffixTokens.join(", ") + ")"
+    }
+
+    function parseRssComponents(descriptionRaw) {
+        var decoded = decodeHtmlEntities(descriptionRaw)
+        var components = []
+        var paragraphRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi
+        var paragraphMatch
+
+        while ((paragraphMatch = paragraphRegex.exec(decoded)) !== null) {
+            var line = normalizeRssComponentLine(stripHtmlText(paragraphMatch[1]))
+            if (line) {
+                components.push(line)
+            }
+        }
+
+        if (components.length === 0) {
+            var fallback = normalizeRssComponentLine(stripHtmlText(decoded))
+            if (fallback) {
+                components.push(fallback)
+            }
+        }
+
+        return components
+    }
+
+    function localizedField(value) {
+        if (value === null || value === undefined) {
+            return ""
+        }
+
+        var primitiveType = typeof value
+        if (primitiveType === "string" || primitiveType === "number" || primitiveType === "boolean") {
+            return MenuFormatter.normalizeText(value)
+        }
+
+        if (primitiveType !== "object") {
+            return ""
+        }
+
+        var preferredKeys = [configLanguage, "fi", "en"]
+        for (var i = 0; i < preferredKeys.length; i++) {
+            var key = preferredKeys[i]
+            if (!Object.prototype.hasOwnProperty.call(value, key)) {
+                continue
+            }
+            var candidate = MenuFormatter.normalizeText(value[key])
+            if (candidate) {
+                return candidate
+            }
+        }
+
+        for (var dynamicKey in value) {
+            if (!Object.prototype.hasOwnProperty.call(value, dynamicKey)) {
+                continue
+            }
+            var fallback = MenuFormatter.normalizeText(value[dynamicKey])
+            if (fallback) {
+                return fallback
+            }
+        }
+
+        return ""
+    }
+
+    function normalizeHuomenAllergenToken(token) {
+        var clean = MenuFormatter.normalizeText(token)
+        if (!clean) {
+            return ""
+        }
+        if (clean === "*") {
+            return "*"
+        }
+
+        var upper = clean.toUpperCase()
+        if (upper === "VEG") {
+            return "Veg"
+        }
+        if (/^[A-Z]{1,8}$/.test(upper)) {
+            return upper
+        }
+
+        return clean
+    }
+
+    function huomenLunchLine(lunch) {
+        var title = localizedField(lunch && lunch.title)
+        if (!title) {
+            return ""
+        }
+
+        var description = localizedField(lunch && lunch.description)
+        var line = title
+        if (description && description !== title) {
+            line += " - " + description
+        }
+
+        var allergens = []
+        var seenAllergens = {}
+        var rawAllergens = Array.isArray(lunch && lunch.allergens) ? lunch.allergens : []
+        for (var i = 0; i < rawAllergens.length; i++) {
+            var rawToken = localizedField(rawAllergens[i] && rawAllergens[i].abbreviation)
+            var token = normalizeHuomenAllergenToken(rawToken)
+            if (!token) {
+                continue
+            }
+            var key = token.toUpperCase()
+            if (seenAllergens[key]) {
+                continue
+            }
+            seenAllergens[key] = true
+            allergens.push(token)
+        }
+
+        if (allergens.length > 0) {
+            line += " (" + allergens.join(", ") + ")"
+        }
+
+        return MenuFormatter.normalizeText(line)
+    }
+
     function parseAntellMenuDateIso(menuDateText) {
         var clean = MenuFormatter.normalizeText(menuDateText)
         if (!clean) {
@@ -348,6 +672,56 @@ PlasmoidItem {
         return best ? localDateIso(best) : ""
     }
 
+    function normalizeCompassRssTodayMenu(rawPayload) {
+        if (!rawPayload || rawPayload.provider !== "compass-rss" || !rawPayload.providerDateValid) {
+            return null
+        }
+
+        var menuDate = MenuFormatter.normalizeText(rawPayload.menuDateIso)
+        if (!menuDate) {
+            return null
+        }
+
+        var components = Array.isArray(rawPayload.components) ? rawPayload.components.slice(0) : []
+        return {
+            dateIso: menuDate,
+            lunchTime: "",
+            menus: components.length > 0
+                ? [{
+                    sortOrder: 1,
+                    name: configLanguage === "en" ? "Lunch" : "Lounas",
+                    price: "",
+                    components: components
+                }]
+                : []
+        }
+    }
+
+    function normalizeHuomenTodayMenu(rawPayload) {
+        if (!rawPayload || rawPayload.provider !== "huomen-json" || !rawPayload.providerDateValid) {
+            return null
+        }
+
+        var menuDate = MenuFormatter.normalizeText(rawPayload.menuDateIso)
+        if (!menuDate) {
+            return null
+        }
+
+        var components = Array.isArray(rawPayload.lunchLines) ? rawPayload.lunchLines.slice(0) : []
+        return {
+            dateIso: menuDate,
+            lunchTime: "",
+            menus: components.length > 0
+                ? [{
+                    sortOrder: 1,
+                    name: configLanguage === "en" ? "Lunch" : "Lounas",
+                    price: "",
+                    components: components
+                }]
+                : []
+        }
+    }
+
     function normalizeAntellTodayMenu(rawPayload) {
         if (!rawPayload || rawPayload.provider !== "antell" || !rawPayload.providerDateValid) {
             return null
@@ -396,6 +770,107 @@ PlasmoidItem {
             providerDateValid: !!isDateToday,
             restaurantName: name,
             restaurantUrl: url
+        }
+    }
+
+    function parseCompassRssPayload(code, xmlText) {
+        var entry = restaurantEntryForCode(code)
+        var payloadText = String(xmlText || "")
+        var channelRaw = parseRssTagRaw(payloadText, "channel")
+        var itemMatch = String(channelRaw || payloadText).match(/<item\b[^>]*>([\s\S]*?)<\/item>/i)
+        var itemRaw = itemMatch ? String(itemMatch[1] || "") : ""
+
+        var channelTitle = stripHtmlText(parseRssTagRaw(channelRaw || payloadText, "title"))
+        var itemTitle = stripHtmlText(parseRssTagRaw(itemRaw, "title"))
+        var itemGuid = stripHtmlText(parseRssTagRaw(itemRaw, "guid"))
+        var itemLink = stripHtmlText(parseRssTagRaw(itemRaw, "link"))
+        var descriptionRaw = parseRssTagRaw(itemRaw, "description")
+
+        var menuDateIso = parseRssMenuDateIso(itemTitle) || parseRssMenuDateIso(itemGuid)
+        var isDateToday = menuDateIso && menuDateIso === todayIso()
+        var components = parseRssComponents(descriptionRaw)
+        var fallbackName = entry ? String(entry.fallbackName || "Compass Lunch") : "Compass Lunch"
+        var name = channelTitle || fallbackName
+        var url = itemLink || (entry && entry.rssUrlBase ? String(entry.rssUrlBase) : "")
+
+        var rawPayload = {
+            provider: "compass-rss",
+            xmlText: payloadText,
+            menuDateIso: menuDateIso,
+            providerDateValid: !!isDateToday,
+            components: components,
+            restaurantName: name,
+            restaurantUrl: url
+        }
+
+        return {
+            rawPayload: rawPayload,
+            todayMenu: normalizeCompassRssTodayMenu(rawPayload),
+            menuDateIso: menuDateIso,
+            providerDateValid: !!isDateToday,
+            restaurantName: name,
+            restaurantUrl: url
+        }
+    }
+
+    function parseHuomenPayload(code, jsonText) {
+        var parsed = null
+        try {
+            parsed = JSON.parse(jsonText)
+        } catch (e) {
+            return { error: "Invalid JSON payload" }
+        }
+
+        if (!parsed || parsed.success === false || !parsed.data || !parsed.data.week || !Array.isArray(parsed.data.week.days)) {
+            return { error: MenuFormatter.normalizeText(parsed && parsed.message) || "Missing week.days in Huomen payload" }
+        }
+
+        var entry = restaurantEntryForCode(code)
+        var data = parsed.data
+        var expectedIso = todayIso()
+        var dayMatch = null
+        var days = data.week.days
+
+        for (var i = 0; i < days.length; i++) {
+            var day = days[i]
+            if (MenuFormatter.normalizeText(day && day.dateString) === expectedIso) {
+                dayMatch = day
+                break
+            }
+        }
+
+        var lunchLines = []
+        if (dayMatch && !dayMatch.isClosed) {
+            var lunches = Array.isArray(dayMatch.lunches) ? dayMatch.lunches : []
+            for (var j = 0; j < lunches.length; j++) {
+                var line = huomenLunchLine(lunches[j])
+                if (line) {
+                    lunchLines.push(line)
+                }
+            }
+        }
+
+        var providerDateValid = !!dayMatch
+        var menuDateIso = providerDateValid ? expectedIso : ""
+        var restaurantName = localizedField(data.location && data.location.name)
+            || (entry ? String(entry.fallbackName || "Huomen Lunch") : "Huomen Lunch")
+        var restaurantUrl = entry && entry.huomenUrlBase ? String(entry.huomenUrlBase) : ""
+        var rawPayload = {
+            provider: "huomen-json",
+            menuDateIso: menuDateIso,
+            providerDateValid: providerDateValid,
+            lunchLines: lunchLines,
+            restaurantName: restaurantName,
+            restaurantUrl: restaurantUrl
+        }
+
+        return {
+            rawPayload: rawPayload,
+            todayMenu: normalizeHuomenTodayMenu(rawPayload),
+            menuDateIso: menuDateIso,
+            providerDateValid: providerDateValid,
+            restaurantName: restaurantName,
+            restaurantUrl: restaurantUrl
         }
     }
 
@@ -548,6 +1023,26 @@ PlasmoidItem {
             providerDateValid = antell.providerDateValid
             restaurantName = antell.restaurantName
             restaurantUrl = antell.restaurantUrl
+        } else if (provider === "compass-rss") {
+            var compassRss = parseCompassRssPayload(code, payloadText)
+            parsed = compassRss.rawPayload
+            todayMenu = compassRss.todayMenu
+            menuDateIso = compassRss.menuDateIso
+            providerDateValid = compassRss.providerDateValid
+            restaurantName = compassRss.restaurantName
+            restaurantUrl = compassRss.restaurantUrl
+        } else if (provider === "huomen-json") {
+            var huomen = parseHuomenPayload(code, payloadText)
+            if (!huomen || huomen.error) {
+                setErrorStateForCode(code, huomen && huomen.error ? huomen.error : "Invalid Huomen payload")
+                return false
+            }
+            parsed = huomen.rawPayload
+            todayMenu = huomen.todayMenu
+            menuDateIso = huomen.menuDateIso
+            providerDateValid = huomen.providerDateValid
+            restaurantName = huomen.restaurantName
+            restaurantUrl = huomen.restaurantUrl
         } else {
             try {
                 parsed = JSON.parse(payloadText)
@@ -665,6 +1160,27 @@ PlasmoidItem {
                 + "?print_lunch_day="
                 + encodeURIComponent(weekdayToken(new Date()))
                 + "&print_lunch_list_day=1"
+        }
+
+        if (entry.provider === "compass-rss") {
+            var rssCost = String(entry.rssCostNumber || "").trim()
+            if (!rssCost) {
+                return ""
+            }
+            return apiRssBaseUrl
+                + "?costNumber="
+                + encodeURIComponent(rssCost)
+                + "&language="
+                + encodeURIComponent(configLanguage)
+        }
+
+        if (entry.provider === "huomen-json") {
+            var huomenApi = String(entry.huomenApiBase || "").trim()
+            if (!huomenApi) {
+                return ""
+            }
+            var separator = huomenApi.indexOf("?") >= 0 ? "&" : "?"
+            return huomenApi + separator + "language=" + encodeURIComponent(configLanguage)
         }
 
         return apiBaseUrl + "?costNumber=" + encodeURIComponent(String(code)) + "&language=" + encodeURIComponent(configLanguage)
@@ -836,6 +1352,7 @@ PlasmoidItem {
             configShowStaffPrice,
             configShowGuestPrice,
             isCompassProvider,
+            configHideExpensiveStudentMeals,
             configShowAllergens,
             configHighlightGlutenFree,
             configHighlightVeg,
@@ -858,6 +1375,7 @@ PlasmoidItem {
             configShowStaffPrice,
             configShowGuestPrice,
             isCompassProvider,
+            configHideExpensiveStudentMeals,
             configShowAllergens,
             configHighlightGlutenFree,
             configHighlightVeg,
@@ -898,7 +1416,7 @@ PlasmoidItem {
         syncSettingsLastUpdatedDisplay()
     }
 
-    onConfigEnableAntellRestaurantsChanged: {
+    onConfigEnabledRestaurantCodesChanged: {
         resetAllStates()
         activeRestaurantCode = configRestaurantCode
         loadCacheStore()

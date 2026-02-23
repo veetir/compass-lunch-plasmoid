@@ -211,6 +211,53 @@ function formatCompassPrice(priceText, showStudentPrice, showStaffPrice, showGue
     return selected.join(" / ");
 }
 
+function parseEuroNumber(valueText) {
+    var clean = normalizeText(valueText).replace(",", ".");
+    var match = clean.match(/([0-9]+(?:\.[0-9]+)?)/);
+    if (!match) {
+        return null;
+    }
+    var parsed = Number(match[1]);
+    return isFinite(parsed) ? parsed : null;
+}
+
+function compassStudentPriceValue(priceText) {
+    var segments = parseCompassPriceSegments(priceText);
+    if (segments.length === 0) {
+        return null;
+    }
+
+    var student = null;
+    var fallbackBase = null;
+    for (var i = 0; i < segments.length; i++) {
+        var segment = segments[i];
+        var numeric = parseEuroNumber(segment.value);
+        if (numeric === null) {
+            continue;
+        }
+        if (segment.key === "student") {
+            if (student === null || numeric < student) {
+                student = numeric;
+            }
+        } else if (segment.key === "base") {
+            if (fallbackBase === null || numeric < fallbackBase) {
+                fallbackBase = numeric;
+            }
+        }
+    }
+
+    return student !== null ? student : fallbackBase;
+}
+
+function shouldHideMenuByStudentPrice(menu, hideExpensiveStudentMeals, isCompassProvider) {
+    if (!hideExpensiveStudentMeals || !isCompassProvider) {
+        return false;
+    }
+
+    var studentPrice = compassStudentPriceValue(menu && menu.price);
+    return studentPrice !== null && studentPrice > 4.0;
+}
+
 function menuHeading(menu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider) {
     var heading = normalizeText(menu.name);
     if (!heading) {
@@ -301,7 +348,7 @@ function highlightSuffixRich(suffix, highlightGlutenFree, highlightVeg, highligh
     return "(" + styledTags.join(", ") + ")";
 }
 
-function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider, showAllergens, highlightGlutenFree, highlightVeg, highlightLactoseFree) {
+function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider, hideExpensiveStudentMeals, showAllergens, highlightGlutenFree, highlightVeg, highlightLactoseFree) {
     var lines = [];
 
     if (fetchState === "stale") {
@@ -318,8 +365,13 @@ function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpoc
     }
 
     if (todayMenu && todayMenu.menus && todayMenu.menus.length > 0) {
+        var hasVisibleMenu = false;
         for (var i = 0; i < todayMenu.menus.length; i++) {
             var menu = todayMenu.menus[i];
+            if (shouldHideMenuByStudentPrice(menu, hideExpensiveStudentMeals, isCompassProvider)) {
+                continue;
+            }
+            hasVisibleMenu = true;
             lines.push(menuHeading(menu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider));
             var components = menu.components || [];
             for (var j = 0; j < components.length; j++) {
@@ -328,6 +380,9 @@ function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpoc
                     lines.push("  - " + component);
                 }
             }
+        }
+        if (!hasVisibleMenu && fetchState !== "loading") {
+            lines.push(textFor(language, "noMenu"));
         }
     } else if (fetchState !== "loading") {
         lines.push(textFor(language, "noMenu"));
@@ -346,7 +401,7 @@ function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpoc
     return lines.join("\n");
 }
 
-function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider, showAllergens, highlightGlutenFree, highlightVeg, highlightLactoseFree) {
+function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider, hideExpensiveStudentMeals, showAllergens, highlightGlutenFree, highlightVeg, highlightLactoseFree) {
     var lines = [];
 
     if (fetchState === "stale") {
@@ -363,8 +418,13 @@ function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdated
     }
 
     if (todayMenu && todayMenu.menus && todayMenu.menus.length > 0) {
+        var hasVisibleMenu = false;
         for (var i = 0; i < todayMenu.menus.length; i++) {
             var menu = todayMenu.menus[i];
+            if (shouldHideMenuByStudentPrice(menu, hideExpensiveStudentMeals, isCompassProvider)) {
+                continue;
+            }
+            hasVisibleMenu = true;
             lines.push("<b>" + escapeHtml(menuHeading(menu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider)) + "</b>");
 
             var components = menu.components || [];
@@ -379,6 +439,9 @@ function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdated
                     lines.push(componentLine);
                 }
             }
+        }
+        if (!hasVisibleMenu && fetchState !== "loading") {
+            lines.push(escapeHtml(textFor(language, "noMenu")));
         }
     } else if (fetchState !== "loading") {
         lines.push(escapeHtml(textFor(language, "noMenu")));
