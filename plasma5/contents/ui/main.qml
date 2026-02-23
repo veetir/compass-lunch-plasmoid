@@ -329,6 +329,104 @@ Item {
         return localDateIso(candidate)
     }
 
+    function isRssAllergenToken(token) {
+        var clean = MenuFormatter.normalizeText(token).replace(/[.;:]+$/, "")
+        if (!clean) {
+            return false
+        }
+        if (clean === "*") {
+            return true
+        }
+
+        if (/^[A-Z]$/.test(clean)) {
+            return true
+        }
+
+        var upper = clean.toUpperCase()
+        if (upper === "VEG" || upper === "VS" || upper === "ILM") {
+            return true
+        }
+
+        return false
+    }
+
+    function normalizeRssAllergenToken(token) {
+        var clean = MenuFormatter.normalizeText(token).replace(/[.;:]+$/, "")
+        if (!clean) {
+            return ""
+        }
+        if (clean === "*") {
+            return "*"
+        }
+
+        var upper = clean.toUpperCase()
+        if (upper === "VEG") {
+            return "Veg"
+        }
+        return upper
+    }
+
+    function normalizeRssComponentLine(rawLine) {
+        var line = MenuFormatter.normalizeText(rawLine)
+        if (!line) {
+            return ""
+        }
+
+        if (/\((?:\*|[A-Za-z]{1,8})(?:\s*,\s*(?:\*|[A-Za-z]{1,8}))*\)\s*$/.test(line)) {
+            return line
+        }
+
+        var compact = line.replace(/\s*[;,]\s*$/, "")
+        var parts = compact.split(/\s*,\s*/)
+        if (parts.length < 2) {
+            return compact
+        }
+
+        var suffixTokens = []
+        for (var i = parts.length - 1; i >= 0; i--) {
+            var candidate = MenuFormatter.normalizeText(parts[i])
+            if (!isRssAllergenToken(candidate)) {
+                break
+            }
+            var normalizedToken = normalizeRssAllergenToken(candidate)
+            if (!normalizedToken) {
+                break
+            }
+            suffixTokens.unshift(normalizedToken)
+        }
+
+        if (suffixTokens.length === 0) {
+            return compact
+        }
+
+        var mainParts = parts.slice(0, parts.length - suffixTokens.length)
+        var mainText = MenuFormatter.normalizeText(mainParts.join(", "))
+        if (!mainText) {
+            return compact
+        }
+
+        var starMatch = mainText.match(/^(.*\S)\s*\*$/)
+        if (starMatch) {
+            mainText = MenuFormatter.normalizeText(starMatch[1])
+            suffixTokens.unshift("*")
+        }
+
+        while (true) {
+            var trailingMatch = mainText.match(/^(.*\S)\s+([A-Za-z*]{1,4})$/)
+            if (!trailingMatch) {
+                break
+            }
+            var trailingToken = normalizeRssAllergenToken(trailingMatch[2])
+            if (!isRssAllergenToken(trailingMatch[2]) || !trailingToken) {
+                break
+            }
+            mainText = MenuFormatter.normalizeText(trailingMatch[1])
+            suffixTokens.unshift(trailingToken)
+        }
+
+        return mainText + " (" + suffixTokens.join(", ") + ")"
+    }
+
     function parseRssComponents(descriptionRaw) {
         var decoded = decodeHtmlEntities(descriptionRaw)
         var components = []
@@ -336,14 +434,14 @@ Item {
         var paragraphMatch
 
         while ((paragraphMatch = paragraphRegex.exec(decoded)) !== null) {
-            var line = stripHtmlText(paragraphMatch[1])
+            var line = normalizeRssComponentLine(stripHtmlText(paragraphMatch[1]))
             if (line) {
                 components.push(line)
             }
         }
 
         if (components.length === 0) {
-            var fallback = stripHtmlText(decoded)
+            var fallback = normalizeRssComponentLine(stripHtmlText(decoded))
             if (fallback) {
                 components.push(fallback)
             }

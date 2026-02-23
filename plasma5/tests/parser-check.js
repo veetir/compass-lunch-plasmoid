@@ -260,6 +260,100 @@ function parseRssDateIso(dateText) {
   return localDateIso(candidate);
 }
 
+function isRssAllergenToken(token) {
+  const clean = normalizeText(token).replace(/[.;:]+$/, "");
+  if (!clean) {
+    return false;
+  }
+  if (clean === "*") {
+    return true;
+  }
+  if (/^[A-Z]$/.test(clean)) {
+    return true;
+  }
+  const upper = clean.toUpperCase();
+  if (upper === "VEG" || upper === "VS" || upper === "ILM") {
+    return true;
+  }
+  return false;
+}
+
+function normalizeRssAllergenToken(token) {
+  const clean = normalizeText(token).replace(/[.;:]+$/, "");
+  if (!clean) {
+    return "";
+  }
+  if (clean === "*") {
+    return "*";
+  }
+  const upper = clean.toUpperCase();
+  if (upper === "VEG") {
+    return "Veg";
+  }
+  return upper;
+}
+
+function normalizeRssComponentLine(rawLine) {
+  const line = normalizeText(rawLine);
+  if (!line) {
+    return "";
+  }
+
+  if (/\((?:\*|[A-Za-z]{1,8})(?:\s*,\s*(?:\*|[A-Za-z]{1,8}))*\)\s*$/.test(line)) {
+    return line;
+  }
+
+  const compact = line.replace(/\s*[;,]\s*$/, "");
+  const parts = compact.split(/\s*,\s*/);
+  if (parts.length < 2) {
+    return compact;
+  }
+
+  const suffixTokens = [];
+  for (let i = parts.length - 1; i >= 0; i -= 1) {
+    const candidate = normalizeText(parts[i]);
+    if (!isRssAllergenToken(candidate)) {
+      break;
+    }
+    const normalized = normalizeRssAllergenToken(candidate);
+    if (!normalized) {
+      break;
+    }
+    suffixTokens.unshift(normalized);
+  }
+
+  if (suffixTokens.length === 0) {
+    return compact;
+  }
+
+  const mainParts = parts.slice(0, parts.length - suffixTokens.length);
+  let mainText = normalizeText(mainParts.join(", "));
+  if (!mainText) {
+    return compact;
+  }
+
+  const starMatch = mainText.match(/^(.*\S)\s*\*$/);
+  if (starMatch) {
+    mainText = normalizeText(starMatch[1]);
+    suffixTokens.unshift("*");
+  }
+
+  while (true) {
+    const trailingMatch = mainText.match(/^(.*\S)\s+([A-Za-z*]{1,4})$/);
+    if (!trailingMatch) {
+      break;
+    }
+    const trailingToken = normalizeRssAllergenToken(trailingMatch[2]);
+    if (!isRssAllergenToken(trailingMatch[2]) || !trailingToken) {
+      break;
+    }
+    mainText = normalizeText(trailingMatch[1]);
+    suffixTokens.unshift(trailingToken);
+  }
+
+  return `${mainText} (${suffixTokens.join(", ")})`;
+}
+
 function parseRssComponents(descriptionRaw) {
   const decoded = decodeHtmlEntities(String(descriptionRaw || ""));
   const components = [];
@@ -267,14 +361,14 @@ function parseRssComponents(descriptionRaw) {
   let paragraphMatch;
 
   while ((paragraphMatch = paragraphRegex.exec(decoded)) !== null) {
-    const line = stripHtmlText(paragraphMatch[1]);
+    const line = normalizeRssComponentLine(stripHtmlText(paragraphMatch[1]));
     if (line) {
       components.push(line);
     }
   }
 
   if (components.length === 0) {
-    const fallback = stripHtmlText(decoded);
+    const fallback = normalizeRssComponentLine(stripHtmlText(decoded));
     if (fallback) {
       components.push(fallback);
     }
@@ -387,8 +481,12 @@ function checkRssFixture(name) {
   assert(todayMeta.itemLink.includes("cafe-snellari"), `${name}: missing restaurant link`);
   assert(todayMeta.components.length >= 4, `${name}: expected at least 4 menu lines`);
   assert(
-    todayMeta.components[0] === "Juustoista peruna-pinaattisosekeittoa *, A, G, ILM, L",
+    todayMeta.components[0] === "Juustoista peruna-pinaattisosekeittoa (*, A, G, ILM, L)",
     `${name}: unexpected first line: ${todayMeta.components[0]}`
+  );
+  assert(
+    todayMeta.components[1] === "Basilikalla ja hunajalla maustettua broileria (G, L, M)",
+    `${name}: unexpected second line: ${todayMeta.components[1]}`
   );
   assert(
     todayMeta.components.some((line) => line.includes("katkarapuja")),
