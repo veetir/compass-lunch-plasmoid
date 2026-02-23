@@ -782,14 +782,49 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                 unsafe {
                     SelectObject(hdc, params.normal_font);
                 }
-                let plain = flatten_text_with_suffix(main, segments);
-                let wrapped = wrap_text_to_width(hdc, &plain, params.content_width);
-                if wrapped.is_empty() {
+                let wrapped_main = wrap_text_to_width(hdc, main, params.content_width);
+                if wrapped_main.is_empty() {
                     y += params.line_height;
                 } else {
-                    for row in wrapped {
+                    for row in wrapped_main {
                         draw_text_line(hdc, &row, PADDING_X, y);
                         y += params.line_height;
+                    }
+                }
+
+                if !segments.is_empty() {
+                    let suffix_plain = flatten_suffix_segments(segments);
+                    if !suffix_plain.is_empty() {
+                        let wrapped_suffix = wrap_text_to_width_with_font(
+                            hdc,
+                            params.small_font,
+                            &suffix_plain,
+                            params.content_width,
+                        );
+                        if wrapped_suffix.len() == 1 {
+                            draw_text_segments(
+                                hdc,
+                                segments,
+                                PADDING_X,
+                                y + 1,
+                                params.small_font,
+                                params.small_bold_font,
+                                params.suffix_color,
+                                params.suffix_highlight_color,
+                            );
+                            y += params.line_height;
+                        } else if wrapped_suffix.is_empty() {
+                            y += params.line_height;
+                        } else {
+                            unsafe {
+                                SelectObject(hdc, params.small_font);
+                                SetTextColor(hdc, params.suffix_color);
+                            }
+                            for row in wrapped_suffix {
+                                draw_text_line(hdc, &row, PADDING_X, y);
+                                y += params.line_height;
+                            }
+                        }
                     }
                 }
             }
@@ -840,10 +875,22 @@ fn measure_lines_layout(
                 if styled_width <= wrap_width {
                     wrapped_line_count += 1;
                 } else {
-                    let plain = flatten_text_with_suffix(main, segments);
-                    let rows =
-                        wrapped_line_count_for_text(hdc, normal_font, &plain, wrap_width).max(1);
-                    wrapped_line_count += rows;
+                    let main_rows =
+                        wrapped_line_count_for_text(hdc, normal_font, main, wrap_width).max(1);
+                    wrapped_line_count += main_rows;
+                    if !segments.is_empty() {
+                        let suffix_plain = flatten_suffix_segments(segments);
+                        if !suffix_plain.is_empty() {
+                            let suffix_rows = wrapped_line_count_for_text(
+                                hdc,
+                                small_font,
+                                &suffix_plain,
+                                wrap_width,
+                            )
+                            .max(1);
+                            wrapped_line_count += suffix_rows;
+                        }
+                    }
                 }
             }
             Line::Spacer => {
@@ -976,12 +1023,12 @@ fn text_with_suffix_width(
     main_width + suffix_width + 4
 }
 
-fn flatten_text_with_suffix(main: &str, segments: &[(String, bool)]) -> String {
-    let mut out = normalize_text(main);
+fn flatten_suffix_segments(segments: &[(String, bool)]) -> String {
+    let mut out = String::new();
     for (segment, _) in segments {
         out.push_str(segment);
     }
-    out
+    normalize_text(&out)
 }
 
 fn draw_text_segments(
@@ -1684,11 +1731,10 @@ fn append_menus(
                 continue;
             }
             let (main, suffix) = split_component_suffix(&component);
-            let main_text = if main.is_empty() {
-                component.clone()
-            } else {
-                main
-            };
+            if main.is_empty() {
+                continue;
+            }
+            let main_text = main;
             if !show_allergens {
                 lines.push(Line::Text(format!("▸ {}", main_text)));
             } else if !suffix.is_empty() {

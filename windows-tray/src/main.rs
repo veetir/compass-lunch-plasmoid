@@ -193,17 +193,13 @@ fn print_today_menu_with_settings(settings: &crate::settings::Settings) -> anyho
                             continue;
                         }
                         let (main, suffix) = split_component_suffix(&component);
-                        if !settings.show_allergens {
-                            let value = if main.is_empty() {
-                                component.clone()
-                            } else {
-                                main
-                            };
-                            println!("  ▸ {}", value);
-                        } else if !suffix.is_empty() {
-                            println!("  ▸ {} {}", main, suffix);
+                        if main.is_empty() {
+                            continue;
+                        }
+                        if !settings.show_allergens || suffix.is_empty() {
+                            println!("  ▸ {}", main);
                         } else {
-                            println!("  ▸ {}", component);
+                            println!("  ▸ {} {}", main, suffix);
                         }
                     }
                 }
