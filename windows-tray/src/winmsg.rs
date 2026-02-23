@@ -92,6 +92,7 @@ pub unsafe extern "system" fn tray_wndproc(
                     log_line("tray left click toggle popup");
                     let popup_hwnd = app.hwnd_popup();
                     if popup_is_visible(popup_hwnd) {
+                        app.persist_settings();
                         popup::hide_popup(popup_hwnd);
                     } else {
                         let state = app.snapshot();
@@ -108,6 +109,7 @@ pub unsafe extern "system" fn tray_wndproc(
                 WM_RBUTTONUP => {}
                 WM_CONTEXTMENU => {
                     log_line("tray context menu");
+                    app.persist_settings();
                     popup::hide_popup(app.hwnd_popup());
                     app.set_context_menu_open(true);
                     let state = app.snapshot();
@@ -202,6 +204,7 @@ pub unsafe extern "system" fn tray_wndproc(
             let app = app_from_hwnd(hwnd);
             if !app.is_null() {
                 let app_ref = &*(app);
+                app_ref.persist_settings();
                 tray::remove_tray_icon(hwnd);
                 let _ = DestroyWindow(app_ref.hwnd_popup());
                 drop(Box::from_raw(app));
@@ -236,7 +239,12 @@ pub unsafe extern "system" fn popup_wndproc(
             LRESULT(0)
         }
         WM_ACTIVATE => {
+            let app = app_from_hwnd(hwnd);
             if wparam.0 == 0 {
+                if !app.is_null() {
+                    let app = &*(app);
+                    app.persist_settings();
+                }
                 popup::hide_popup(hwnd);
             }
             LRESULT(0)
@@ -250,6 +258,7 @@ pub unsafe extern "system" fn popup_wndproc(
             let key = wparam.0 as u32;
             match key {
                 0x1B => {
+                    app.persist_settings();
                     popup::hide_popup(hwnd);
                 }
                 0x25 | 0x41 => {
@@ -295,6 +304,7 @@ pub unsafe extern "system" fn popup_wndproc(
                         app.maybe_refresh_on_selection();
                     }
                     popup::HeaderButtonAction::Close => {
+                        app.persist_settings();
                         popup::hide_popup(hwnd);
                         return LRESULT(0);
                     }
@@ -308,6 +318,7 @@ pub unsafe extern "system" fn popup_wndproc(
             let app = app_from_hwnd(hwnd);
             if !app.is_null() {
                 let app = &*(app);
+                app.persist_settings();
                 popup::hide_popup(hwnd);
                 let state = app.snapshot();
                 tray::show_context_menu(app.hwnd_tray(), &state);

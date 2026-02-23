@@ -1,11 +1,16 @@
+use crate::api;
 use crate::app::{AppState, FetchStatus};
+use crate::cache;
 use crate::format::{
     date_and_time_line, menu_heading, normalize_text, split_component_suffix, student_price_eur,
     text_for, PriceGroups,
 };
 use crate::model::TodayMenu;
-use crate::restaurant::{available_restaurants, Provider};
+use crate::restaurant::{available_restaurants, Provider, Restaurant};
+use crate::settings::Settings;
 use crate::util::to_wstring;
+use std::sync::{Mutex, OnceLock};
+use time::{OffsetDateTime, UtcOffset};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
@@ -23,11 +28,43 @@ const PADDING_X: i32 = 12;
 const PADDING_Y: i32 = 10;
 const LINE_GAP: i32 = 2;
 const ANCHOR_GAP: i32 = 10;
-const POPUP_WIDTH: i32 = 700;
+const POPUP_WIDTH: i32 = 525;
 const HEADER_HEIGHT: i32 = 46;
 const HEADER_BUTTON_SIZE: i32 = 30;
 const HEADER_BUTTON_GAP: i32 = 8;
 const LOADING_HINT_DELAY_MS: i64 = 250;
+const MAX_DYNAMIC_LINES: usize = 35;
+
+static POPUP_LINE_BUDGET_CACHE: OnceLock<Mutex<Option<PopupLineBudgetCache>>> = OnceLock::new();
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PopupLineBudgetKey {
+    today_key: String,
+    language: String,
+    enable_antell_restaurants: bool,
+    show_prices: bool,
+    show_student_price: bool,
+    show_staff_price: bool,
+    show_guest_price: bool,
+    hide_expensive_student_meals: bool,
+    show_allergens: bool,
+    highlight_gluten_free: bool,
+    highlight_veg: bool,
+    highlight_lactose_free: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RestaurantCacheSignature {
+    code: String,
+    mtime_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+struct PopupLineBudgetCache {
+    key: PopupLineBudgetKey,
+    signatures: Vec<RestaurantCacheSignature>,
+    max_lines: Option<usize>,
+}
 
 #[derive(Debug, Clone)]
 enum Line {
@@ -430,10 +467,11 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
     unsafe {
         let hdc = windows::Win32::Graphics::Gdi::GetDC(hwnd);
         let (normal_font, bold_font, small_font, small_bold_font) = create_fonts(hdc);
-        let lines = build_lines(state);
+        let current_lines = build_lines(state);
+        let target_lines = popup_target_line_count(state, current_lines.len());
         let metrics = text_metrics(hdc, normal_font);
         let line_height = metrics.tmHeight as i32 + LINE_GAP;
-        let height = HEADER_HEIGHT + (lines.len() as i32 * line_height) + PADDING_Y * 2;
+        let height = HEADER_HEIGHT + (target_lines as i32 * line_height) + PADDING_Y * 2;
         DeleteObject(normal_font);
         DeleteObject(bold_font);
         DeleteObject(small_font);
@@ -598,6 +636,194 @@ fn build_lines(state: &AppState) -> Vec<Line> {
     }
 
     lines
+}
+
+fn popup_target_line_count(state: &AppState, current_lines: usize) -> usize {
+    let today_key = local_today_key();
+    let key = line_budget_key(&state.settings, &today_key);
+    let signatures = cache_signatures(&state.settings);
+
+    if let Some(max_lines) = cached_line_budget(&key, &signatures) {
+        return max_lines.unwrap_or(current_lines).min(MAX_DYNAMIC_LINES);
+    }
+
+    let max_lines = max_today_cached_line_count(state, &today_key);
+    update_line_budget_cache(key, signatures, max_lines);
+    match max_lines {
+        Some(count) => count.min(MAX_DYNAMIC_LINES),
+        None => current_lines.min(MAX_DYNAMIC_LINES),
+    }
+}
+
+fn line_budget_key(settings: &Settings, today_key: &str) -> PopupLineBudgetKey {
+    PopupLineBudgetKey {
+        today_key: today_key.to_string(),
+        language: settings.language.clone(),
+        enable_antell_restaurants: settings.enable_antell_restaurants,
+        show_prices: settings.show_prices,
+        show_student_price: settings.show_student_price,
+        show_staff_price: settings.show_staff_price,
+        show_guest_price: settings.show_guest_price,
+        hide_expensive_student_meals: settings.hide_expensive_student_meals,
+        show_allergens: settings.show_allergens,
+        highlight_gluten_free: settings.highlight_gluten_free,
+        highlight_veg: settings.highlight_veg,
+        highlight_lactose_free: settings.highlight_lactose_free,
+    }
+}
+
+fn cache_signatures(settings: &Settings) -> Vec<RestaurantCacheSignature> {
+    let mut signatures = Vec::new();
+    for restaurant in available_restaurants(settings.enable_antell_restaurants) {
+        let mtime_ms =
+            cache::cache_mtime_ms(restaurant.provider, restaurant.code, &settings.language)
+                .unwrap_or(-1);
+        signatures.push(RestaurantCacheSignature {
+            code: restaurant.code.to_string(),
+            mtime_ms,
+        });
+    }
+    signatures
+}
+
+fn cached_line_budget(
+    key: &PopupLineBudgetKey,
+    signatures: &[RestaurantCacheSignature],
+) -> Option<Option<usize>> {
+    let cache = POPUP_LINE_BUDGET_CACHE.get_or_init(|| Mutex::new(None));
+    let guard = cache.lock().ok()?;
+    let entry = guard.as_ref()?;
+    if entry.key == *key && entry.signatures == signatures {
+        Some(entry.max_lines)
+    } else {
+        None
+    }
+}
+
+fn update_line_budget_cache(
+    key: PopupLineBudgetKey,
+    signatures: Vec<RestaurantCacheSignature>,
+    max_lines: Option<usize>,
+) {
+    let cache = POPUP_LINE_BUDGET_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some(PopupLineBudgetCache {
+            key,
+            signatures,
+            max_lines,
+        });
+    }
+}
+
+fn max_today_cached_line_count(state: &AppState, today_key: &str) -> Option<usize> {
+    let settings = &state.settings;
+    let mut max_lines: Option<usize> = None;
+
+    for restaurant in available_restaurants(settings.enable_antell_restaurants) {
+        let raw = match cache::read_cache(restaurant.provider, restaurant.code, &settings.language)
+        {
+            Some(payload) => payload,
+            None => continue,
+        };
+
+        let parsed = match api::parse_cached_payload(
+            &raw,
+            restaurant.provider,
+            restaurant,
+            &settings.language,
+        ) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+
+        if !parsed.ok || !is_today_valid_cache(&parsed, restaurant, settings, today_key) {
+            continue;
+        }
+
+        let candidate_state =
+            popup_state_from_cached_result(settings, restaurant, &parsed, today_key);
+        let candidate_lines = build_lines(&candidate_state).len();
+        max_lines = Some(max_lines.map_or(candidate_lines, |prev| prev.max(candidate_lines)));
+    }
+
+    max_lines
+}
+
+fn is_today_valid_cache(
+    parsed: &api::FetchOutput,
+    restaurant: Restaurant,
+    settings: &Settings,
+    today_key: &str,
+) -> bool {
+    match restaurant.provider {
+        Provider::Antell => cache::cache_mtime_ms(restaurant.provider, restaurant.code, &settings.language)
+            .and_then(date_key_from_epoch_ms)
+            .is_some_and(|date| date == today_key),
+        _ => !parsed.payload_date.is_empty() && parsed.payload_date == today_key,
+    }
+}
+
+fn popup_state_from_cached_result(
+    settings: &Settings,
+    restaurant: Restaurant,
+    parsed: &api::FetchOutput,
+    today_key: &str,
+) -> AppState {
+    let restaurant_name = if parsed.restaurant_name.is_empty() {
+        restaurant.name.to_string()
+    } else {
+        parsed.restaurant_name.clone()
+    };
+
+    AppState {
+        settings: settings.clone(),
+        status: if parsed.ok {
+            FetchStatus::Ok
+        } else {
+            FetchStatus::Error
+        },
+        loading_started_epoch_ms: 0,
+        error_message: parsed.error_message.clone(),
+        stale_network_error: false,
+        today_menu: parsed.today_menu.clone(),
+        restaurant_name,
+        restaurant_url: parsed.restaurant_url.clone(),
+        raw_payload: String::new(),
+        provider: restaurant.provider,
+        payload_date: parsed.payload_date.clone(),
+        stale_date: !parsed.payload_date.is_empty() && parsed.payload_date != today_key,
+    }
+}
+
+fn local_today_key() -> String {
+    let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+    let date = now.date();
+    format!(
+        "{:04}-{:02}-{:02}",
+        date.year(),
+        date.month() as u8,
+        date.day()
+    )
+}
+
+fn date_key_from_epoch_ms(ms: i64) -> Option<String> {
+    if ms <= 0 {
+        return None;
+    }
+
+    let secs = ms / 1000;
+    let nanos = ((ms % 1000) * 1_000_000) as u32;
+    let mut dt = OffsetDateTime::from_unix_timestamp(secs).ok()?;
+    dt = dt.replace_nanosecond(nanos).ok()?;
+    let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
+    let local = dt.to_offset(offset);
+    let date = local.date();
+    Some(format!(
+        "{:04}-{:02}-{:02}",
+        date.year(),
+        date.month() as u8,
+        date.day()
+    ))
 }
 
 fn position_near_point(width: i32, height: i32, point: POINT) -> (i32, i32) {
