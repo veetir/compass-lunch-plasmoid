@@ -468,6 +468,20 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
                 popup::resize_popup_keep_position(app.hwnd_popup(), &state);
             }
         }
+        tray::CMD_THEME_TELETEXT1 => {
+            app.set_theme("teletext1");
+            if popup_is_visible(app.hwnd_popup()) {
+                let state = app.snapshot();
+                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+            }
+        }
+        tray::CMD_THEME_TELETEXT2 => {
+            app.set_theme("teletext2");
+            if popup_is_visible(app.hwnd_popup()) {
+                let state = app.snapshot();
+                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+            }
+        }
         tray::CMD_TOGGLE_STARTUP => {
             let enable = !crate::startup::is_enabled();
             if let Err(err) = crate::startup::set_enabled(enable) {

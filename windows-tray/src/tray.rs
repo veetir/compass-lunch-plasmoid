@@ -41,6 +41,8 @@ pub const CMD_THEME_GREEN: u16 = 2214;
 pub const CMD_TOGGLE_STARTUP: u16 = 2215;
 pub const CMD_TOGGLE_LOGGING: u16 = 2216;
 pub const CMD_OPEN_APPDATA_DIR: u16 = 2217;
+pub const CMD_THEME_TELETEXT1: u16 = 2218;
+pub const CMD_THEME_TELETEXT2: u16 = 2219;
 pub const CMD_REFRESH_NOW: u16 = 2301;
 pub const CMD_REFRESH_OFF: u16 = 2400;
 pub const CMD_REFRESH_60: u16 = 2401;
@@ -365,6 +367,18 @@ fn build_context_menu(state: &AppState) -> HMENU {
             CMD_THEME_GREEN,
             "Green",
             state.settings.theme == "green",
+        );
+        append_menu_item(
+            theme_menu,
+            CMD_THEME_TELETEXT1,
+            "Teletext 1",
+            state.settings.theme == "teletext1",
+        );
+        append_menu_item(
+            theme_menu,
+            CMD_THEME_TELETEXT2,
+            "Teletext 2",
+            state.settings.theme == "teletext2",
         );
         let _ = AppendMenuW(
             menu,

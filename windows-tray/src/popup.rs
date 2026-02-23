@@ -52,6 +52,7 @@ pub const POPUP_ANIM_TIMER_ID: usize = 100;
 struct PopupLineBudgetKey {
     today_key: String,
     language: String,
+    theme: String,
     dpi_y: i32,
     enable_antell_restaurants: bool,
     show_prices: bool,
@@ -249,10 +250,7 @@ fn start_animation(hwnd: HWND, duration_ms: i64, kind: PopupAnimationKind) {
 fn clear_animation_state(hwnd: HWND) {
     let store = POPUP_ANIMATION.get_or_init(|| Mutex::new(None));
     if let Ok(mut guard) = store.lock() {
-        if guard
-            .as_ref()
-            .is_some_and(|anim| anim.hwnd == hwnd)
-        {
+        if guard.as_ref().is_some_and(|anim| anim.hwnd == hwnd) {
             *guard = None;
         }
     }
@@ -403,14 +401,14 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
         let mut rect = RECT::default();
         let _ = GetClientRect(hwnd, &mut rect);
         let width = rect.right - rect.left;
-        let (bg_color, text_color, suffix_color, header_bg_color, button_bg_color, divider_color) =
-            theme_colors(&state.settings.theme);
-        let brush = CreateSolidBrush(bg_color);
+        let palette = theme_palette(&state.settings.theme);
+        let brush = CreateSolidBrush(palette.bg_color);
         FillRect(hdc, &rect, brush);
         DeleteObject(brush);
         SetBkMode(hdc, TRANSPARENT);
 
-        let (normal_font, bold_font, small_font, small_bold_font) = create_fonts(hdc);
+        let (normal_font, bold_font, small_font, small_bold_font) =
+            create_fonts(hdc, &state.settings.theme);
         let _old_font = SelectObject(hdc, normal_font);
 
         let metrics = text_metrics(hdc, normal_font);
@@ -424,7 +422,7 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
             right: rect.right,
             bottom: rect.top + HEADER_HEIGHT,
         };
-        let header_brush = CreateSolidBrush(header_bg_color);
+        let header_brush = CreateSolidBrush(palette.header_bg_color);
         FillRect(hdc, &header_rect, header_brush);
         DeleteObject(header_brush);
 
@@ -433,24 +431,24 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
             hdc,
             &layout.prev,
             "<",
-            button_bg_color,
-            text_color,
+            palette.button_bg_color,
+            palette.body_text_color,
             normal_font,
         );
         draw_header_button(
             hdc,
             &layout.next,
             ">",
-            button_bg_color,
-            text_color,
+            palette.button_bg_color,
+            palette.body_text_color,
             normal_font,
         );
         draw_header_button(
             hdc,
             &layout.close,
             "X",
-            button_bg_color,
-            text_color,
+            palette.button_bg_color,
+            palette.body_text_color,
             normal_font,
         );
 
@@ -460,7 +458,7 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
             right: rect.right,
             bottom: header_rect.bottom,
         };
-        let divider_brush = CreateSolidBrush(divider_color);
+        let divider_brush = CreateSolidBrush(palette.divider_color);
         FillRect(hdc, &divider_rect, divider_brush);
         DeleteObject(divider_brush);
 
@@ -473,8 +471,15 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                 } => {
                     let y_offset =
                         ((1.0 - progress) * POPUP_SWITCH_OFFSET_PX as f32).round() as i32;
-                    let layer_text = lerp_color(bg_color, text_color, progress);
-                    let layer_suffix = lerp_color(bg_color, suffix_color, progress);
+                    let layer_body_text =
+                        lerp_color(palette.bg_color, palette.body_text_color, progress);
+                    let layer_heading =
+                        lerp_color(palette.bg_color, palette.heading_color, progress);
+                    let layer_title =
+                        lerp_color(palette.bg_color, palette.header_title_color, progress);
+                    let layer_suffix = lerp_color(palette.bg_color, palette.suffix_color, progress);
+                    let layer_suffix_highlight =
+                        lerp_color(palette.bg_color, palette.suffix_highlight_color, progress);
                     draw_content_layer(
                         hdc,
                         &title,
@@ -482,8 +487,11 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                         DrawLayerParams {
                             width,
                             content_width,
-                            text_color: layer_text,
+                            body_text_color: layer_body_text,
+                            heading_color: layer_heading,
+                            header_title_color: layer_title,
                             suffix_color: layer_suffix,
+                            suffix_highlight_color: layer_suffix_highlight,
                             layout: &layout,
                             metrics: &metrics,
                             line_height,
@@ -501,8 +509,19 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                     progress,
                 } => {
                     let y_offset = -((progress * POPUP_SWITCH_OFFSET_PX as f32).round() as i32);
-                    let layer_text = lerp_color(bg_color, text_color, 1.0 - progress);
-                    let layer_suffix = lerp_color(bg_color, suffix_color, 1.0 - progress);
+                    let layer_body_text =
+                        lerp_color(palette.bg_color, palette.body_text_color, 1.0 - progress);
+                    let layer_heading =
+                        lerp_color(palette.bg_color, palette.heading_color, 1.0 - progress);
+                    let layer_title =
+                        lerp_color(palette.bg_color, palette.header_title_color, 1.0 - progress);
+                    let layer_suffix =
+                        lerp_color(palette.bg_color, palette.suffix_color, 1.0 - progress);
+                    let layer_suffix_highlight = lerp_color(
+                        palette.bg_color,
+                        palette.suffix_highlight_color,
+                        1.0 - progress,
+                    );
                     draw_content_layer(
                         hdc,
                         &title,
@@ -510,8 +529,11 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                         DrawLayerParams {
                             width,
                             content_width,
-                            text_color: layer_text,
+                            body_text_color: layer_body_text,
+                            heading_color: layer_heading,
+                            header_title_color: layer_title,
                             suffix_color: layer_suffix,
+                            suffix_highlight_color: layer_suffix_highlight,
                             layout: &layout,
                             metrics: &metrics,
                             line_height,
@@ -534,12 +556,29 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                     let dir = if direction >= 0 { 1 } else { -1 };
                     let old_offset =
                         -dir * ((progress * POPUP_SWITCH_OFFSET_PX as f32).round() as i32);
-                    let new_offset = dir
-                        * (((1.0 - progress) * POPUP_SWITCH_OFFSET_PX as f32).round() as i32);
-                    let old_text = lerp_color(bg_color, text_color, 1.0 - progress);
-                    let old_suffix = lerp_color(bg_color, suffix_color, 1.0 - progress);
-                    let new_text = lerp_color(bg_color, text_color, progress);
-                    let new_suffix = lerp_color(bg_color, suffix_color, progress);
+                    let new_offset =
+                        dir * (((1.0 - progress) * POPUP_SWITCH_OFFSET_PX as f32).round() as i32);
+                    let old_body_text =
+                        lerp_color(palette.bg_color, palette.body_text_color, 1.0 - progress);
+                    let old_heading =
+                        lerp_color(palette.bg_color, palette.heading_color, 1.0 - progress);
+                    let old_title_color =
+                        lerp_color(palette.bg_color, palette.header_title_color, 1.0 - progress);
+                    let old_suffix =
+                        lerp_color(palette.bg_color, palette.suffix_color, 1.0 - progress);
+                    let old_suffix_highlight = lerp_color(
+                        palette.bg_color,
+                        palette.suffix_highlight_color,
+                        1.0 - progress,
+                    );
+                    let new_body_text =
+                        lerp_color(palette.bg_color, palette.body_text_color, progress);
+                    let new_heading = lerp_color(palette.bg_color, palette.heading_color, progress);
+                    let new_title_color =
+                        lerp_color(palette.bg_color, palette.header_title_color, progress);
+                    let new_suffix = lerp_color(palette.bg_color, palette.suffix_color, progress);
+                    let new_suffix_highlight =
+                        lerp_color(palette.bg_color, palette.suffix_highlight_color, progress);
                     draw_content_layer(
                         hdc,
                         &old_title,
@@ -547,8 +586,11 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                         DrawLayerParams {
                             width,
                             content_width,
-                            text_color: old_text,
+                            body_text_color: old_body_text,
+                            heading_color: old_heading,
+                            header_title_color: old_title_color,
                             suffix_color: old_suffix,
+                            suffix_highlight_color: old_suffix_highlight,
                             layout: &layout,
                             metrics: &metrics,
                             line_height,
@@ -566,8 +608,11 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                         DrawLayerParams {
                             width,
                             content_width,
-                            text_color: new_text,
+                            body_text_color: new_body_text,
+                            heading_color: new_heading,
+                            header_title_color: new_title_color,
                             suffix_color: new_suffix,
+                            suffix_highlight_color: new_suffix_highlight,
                             layout: &layout,
                             metrics: &metrics,
                             line_height,
@@ -590,8 +635,11 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                 DrawLayerParams {
                     width,
                     content_width,
-                    text_color,
-                    suffix_color,
+                    body_text_color: palette.body_text_color,
+                    heading_color: palette.heading_color,
+                    header_title_color: palette.header_title_color,
+                    suffix_color: palette.suffix_color,
+                    suffix_highlight_color: palette.suffix_highlight_color,
                     layout: &layout,
                     metrics: &metrics,
                     line_height,
@@ -616,8 +664,11 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
 struct DrawLayerParams<'a> {
     width: i32,
     content_width: i32,
-    text_color: COLORREF,
+    body_text_color: COLORREF,
+    heading_color: COLORREF,
+    header_title_color: COLORREF,
     suffix_color: COLORREF,
+    suffix_highlight_color: COLORREF,
     layout: &'a HeaderLayout,
     metrics: &'a TEXTMETRICW,
     line_height: i32,
@@ -631,7 +682,7 @@ struct DrawLayerParams<'a> {
 fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerParams<'_>) {
     unsafe {
         SelectObject(hdc, params.bold_font);
-        SetTextColor(hdc, params.text_color);
+        SetTextColor(hdc, params.header_title_color);
     }
 
     let clipped_title = fit_text_to_width(
@@ -641,8 +692,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
     );
     let title_width = text_width(hdc, &clipped_title);
     let title_x = ((params.width - title_width) / 2).max(params.layout.next.right + 12);
-    let title_y =
-        ((HEADER_HEIGHT - params.metrics.tmHeight as i32) / 2 - 1) + params.y_offset;
+    let title_y = ((HEADER_HEIGHT - params.metrics.tmHeight as i32) / 2 - 1) + params.y_offset;
     draw_text_line(hdc, &clipped_title, title_x, title_y);
 
     let mut y = HEADER_HEIGHT + PADDING_Y + params.y_offset;
@@ -651,7 +701,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
             Line::Heading(text) => {
                 unsafe {
                     SelectObject(hdc, params.bold_font);
-                    SetTextColor(hdc, params.text_color);
+                    SetTextColor(hdc, params.heading_color);
                 }
                 let wrapped = wrap_text_to_width(hdc, text, params.content_width);
                 if wrapped.is_empty() {
@@ -666,7 +716,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
             Line::Text(text) => {
                 unsafe {
                     SelectObject(hdc, params.normal_font);
-                    SetTextColor(hdc, params.text_color);
+                    SetTextColor(hdc, params.body_text_color);
                 }
                 let wrapped = wrap_text_to_width(hdc, text, params.content_width);
                 if wrapped.is_empty() {
@@ -681,7 +731,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
             Line::TextWithSuffixSegments { main, segments } => {
                 unsafe {
                     SelectObject(hdc, params.normal_font);
-                    SetTextColor(hdc, params.text_color);
+                    SetTextColor(hdc, params.body_text_color);
                 }
                 let styled_width = text_with_suffix_width(
                     hdc,
@@ -722,6 +772,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                                 params.small_font,
                                 params.small_bold_font,
                                 params.suffix_color,
+                                params.suffix_highlight_color,
                             );
                         }
                     }
@@ -940,11 +991,13 @@ fn draw_text_segments(
     y: i32,
     normal_font: HFONT,
     bold_font: HFONT,
-    color: COLORREF,
+    normal_color: COLORREF,
+    highlight_color: COLORREF,
 ) {
     let mut cursor = x;
     for (text, bold) in segments {
         let font = if *bold { bold_font } else { normal_font };
+        let color = if *bold { highlight_color } else { normal_color };
         unsafe {
             SelectObject(hdc, font);
             SetTextColor(hdc, color);
@@ -1079,7 +1132,8 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
     unsafe {
         let hdc = windows::Win32::Graphics::Gdi::GetDC(hwnd);
         let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
-        let (normal_font, bold_font, small_font, small_bold_font) = create_fonts(hdc);
+        let (normal_font, bold_font, small_font, small_bold_font) =
+            create_fonts(hdc, &state.settings.theme);
         let current_lines = build_lines(state);
         let current_metrics = measure_lines_layout(
             hdc,
@@ -1133,12 +1187,12 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
     }
 }
 
-fn create_fonts(hdc: HDC) -> (HFONT, HFONT, HFONT, HFONT) {
+fn create_fonts(hdc: HDC, theme: &str) -> (HFONT, HFONT, HFONT, HFONT) {
     unsafe {
         let dpi = GetDeviceCaps(hdc, LOGPIXELSY);
         let height_normal = -MulDiv(12, dpi, 72);
         let height_small = -MulDiv(10, dpi, 72);
-        let face = to_wstring("Segoe UI");
+        let face = to_wstring(theme_font_family(theme));
 
         let normal = CreateFontW(
             height_normal,
@@ -1326,6 +1380,7 @@ fn line_budget_key(settings: &Settings, today_key: &str, dpi_y: i32) -> PopupLin
     PopupLineBudgetKey {
         today_key: today_key.to_string(),
         language: settings.language.clone(),
+        theme: settings.theme.clone(),
         dpi_y,
         enable_antell_restaurants: settings.enable_antell_restaurants,
         show_prices: settings.show_prices,
@@ -1434,12 +1489,14 @@ fn max_today_cached_layout_budget(
             POPUP_MAX_CONTENT_WIDTH,
         );
         max_wrapped_lines = Some(
-            max_wrapped_lines
-                .map_or(metrics.wrapped_line_count, |prev| prev.max(metrics.wrapped_line_count)),
+            max_wrapped_lines.map_or(metrics.wrapped_line_count, |prev| {
+                prev.max(metrics.wrapped_line_count)
+            }),
         );
         max_content_width_px = Some(
-            max_content_width_px
-                .map_or(metrics.required_content_width, |prev| prev.max(metrics.required_content_width)),
+            max_content_width_px.map_or(metrics.required_content_width, |prev| {
+                prev.max(metrics.required_content_width)
+            }),
         );
     }
 
@@ -1456,9 +1513,11 @@ fn is_today_valid_cache(
     today_key: &str,
 ) -> bool {
     match restaurant.provider {
-        Provider::Antell => cache::cache_mtime_ms(restaurant.provider, restaurant.code, &settings.language)
-            .and_then(date_key_from_epoch_ms)
-            .is_some_and(|date| date == today_key),
+        Provider::Antell => {
+            cache::cache_mtime_ms(restaurant.provider, restaurant.code, &settings.language)
+                .and_then(date_key_from_epoch_ms)
+                .is_some_and(|date| date == today_key)
+        }
         _ => !parsed.payload_date.is_empty() && parsed.payload_date == today_key,
     }
 }
@@ -1731,40 +1790,98 @@ fn color_channels(color: COLORREF) -> (u8, u8, u8) {
     (r, g, b)
 }
 
-fn theme_colors(theme: &str) -> (COLORREF, COLORREF, COLORREF, COLORREF, COLORREF, COLORREF) {
+#[derive(Debug, Clone, Copy)]
+struct ThemePalette {
+    bg_color: COLORREF,
+    body_text_color: COLORREF,
+    heading_color: COLORREF,
+    header_title_color: COLORREF,
+    suffix_color: COLORREF,
+    suffix_highlight_color: COLORREF,
+    header_bg_color: COLORREF,
+    button_bg_color: COLORREF,
+    divider_color: COLORREF,
+}
+
+fn theme_palette(theme: &str) -> ThemePalette {
     match theme {
-        "light" => (
-            COLORREF(0x00FFFFFF),
-            COLORREF(0x00000000),
-            COLORREF(0x00808080),
-            COLORREF(0x00F3F3F3),
-            COLORREF(0x00DDDDDD),
-            COLORREF(0x00C9C9C9),
-        ),
-        "blue" => (
-            COLORREF(0x00562401),
-            COLORREF(0x00FFFFFF),
-            COLORREF(0x00E7C7A7),
-            COLORREF(0x00733809),
-            COLORREF(0x00804A1A),
-            COLORREF(0x00834D1F),
-        ),
-        "green" => (
-            COLORREF(0x00000000),
-            COLORREF(0x0000D000),
-            COLORREF(0x00009000),
-            COLORREF(0x000B1A0B),
-            COLORREF(0x00142D14),
-            COLORREF(0x00142D14),
-        ),
-        _ => (
-            COLORREF(0x00000000),
-            COLORREF(0x00FFFFFF),
-            COLORREF(0x00B0B0B0),
-            COLORREF(0x00101010),
-            COLORREF(0x00202020),
-            COLORREF(0x00202020),
-        ),
+        "light" => ThemePalette {
+            bg_color: COLORREF(0x00FFFFFF),
+            body_text_color: COLORREF(0x00000000),
+            heading_color: COLORREF(0x00000000),
+            header_title_color: COLORREF(0x00000000),
+            suffix_color: COLORREF(0x00808080),
+            suffix_highlight_color: COLORREF(0x00808080),
+            header_bg_color: COLORREF(0x00F3F3F3),
+            button_bg_color: COLORREF(0x00DDDDDD),
+            divider_color: COLORREF(0x00C9C9C9),
+        },
+        "blue" => ThemePalette {
+            bg_color: COLORREF(0x00562401),
+            body_text_color: COLORREF(0x00FFFFFF),
+            heading_color: COLORREF(0x00FFFFFF),
+            header_title_color: COLORREF(0x00FFFFFF),
+            suffix_color: COLORREF(0x00E7C7A7),
+            suffix_highlight_color: COLORREF(0x00E7C7A7),
+            header_bg_color: COLORREF(0x00733809),
+            button_bg_color: COLORREF(0x00804A1A),
+            divider_color: COLORREF(0x00834D1F),
+        },
+        "green" => ThemePalette {
+            bg_color: COLORREF(0x00000000),
+            body_text_color: COLORREF(0x0000D000),
+            heading_color: COLORREF(0x0000D000),
+            header_title_color: COLORREF(0x0000D000),
+            suffix_color: COLORREF(0x00009000),
+            suffix_highlight_color: COLORREF(0x0000D000),
+            header_bg_color: COLORREF(0x000B1A0B),
+            button_bg_color: COLORREF(0x00142D14),
+            divider_color: COLORREF(0x00142D14),
+        },
+        "teletext1" => ThemePalette {
+            bg_color: rgb(0, 0, 0),
+            body_text_color: rgb(255, 255, 255),
+            heading_color: rgb(0, 255, 255),
+            header_title_color: rgb(255, 255, 0),
+            suffix_color: rgb(0, 255, 0),
+            suffix_highlight_color: rgb(255, 0, 255),
+            header_bg_color: rgb(0, 0, 180),
+            button_bg_color: rgb(0, 0, 140),
+            divider_color: rgb(255, 0, 0),
+        },
+        "teletext2" => ThemePalette {
+            bg_color: rgb(0, 0, 0),
+            body_text_color: rgb(225, 255, 225),
+            heading_color: rgb(255, 0, 255),
+            header_title_color: rgb(0, 96, 255),
+            suffix_color: rgb(0, 255, 150),
+            suffix_highlight_color: rgb(255, 255, 0),
+            header_bg_color: rgb(0, 215, 0),
+            button_bg_color: rgb(0, 145, 0),
+            divider_color: rgb(255, 0, 255),
+        },
+        _ => ThemePalette {
+            bg_color: COLORREF(0x00000000),
+            body_text_color: COLORREF(0x00FFFFFF),
+            heading_color: COLORREF(0x00FFFFFF),
+            header_title_color: COLORREF(0x00FFFFFF),
+            suffix_color: COLORREF(0x00B0B0B0),
+            suffix_highlight_color: COLORREF(0x00B0B0B0),
+            header_bg_color: COLORREF(0x00101010),
+            button_bg_color: COLORREF(0x00202020),
+            divider_color: COLORREF(0x00202020),
+        },
+    }
+}
+
+fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
+    COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16))
+}
+
+fn theme_font_family(theme: &str) -> &'static str {
+    match theme {
+        "teletext1" | "teletext2" => "Consolas",
+        _ => "Segoe UI",
     }
 }
 

@@ -104,7 +104,15 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
         .theme
         .as_deref()
         .map(normalize_theme)
-        .or_else(|| raw.dark_mode.map(|dark| if dark { "dark".to_string() } else { "light".to_string() }))
+        .or_else(|| {
+            raw.dark_mode.map(|dark| {
+                if dark {
+                    "dark".to_string()
+                } else {
+                    "light".to_string()
+                }
+            })
+        })
         .unwrap_or_else(|| defaults.theme.clone());
 
     Ok(Settings {
@@ -112,7 +120,9 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
         language: raw.language.unwrap_or(defaults.language),
         refresh_minutes: raw.refresh_minutes.unwrap_or(defaults.refresh_minutes),
         show_prices: raw.show_prices.unwrap_or(defaults.show_prices),
-        show_student_price: raw.show_student_price.unwrap_or(defaults.show_student_price),
+        show_student_price: raw
+            .show_student_price
+            .unwrap_or(defaults.show_student_price),
         show_staff_price: raw.show_staff_price.unwrap_or(defaults.show_staff_price),
         show_guest_price: raw.show_guest_price.unwrap_or(defaults.show_guest_price),
         hide_expensive_student_meals: raw
@@ -120,7 +130,9 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
             .unwrap_or(defaults.hide_expensive_student_meals),
         theme,
         show_allergens,
-        highlight_gluten_free: raw.highlight_gluten_free.unwrap_or(defaults.highlight_gluten_free),
+        highlight_gluten_free: raw
+            .highlight_gluten_free
+            .unwrap_or(defaults.highlight_gluten_free),
         highlight_veg: raw.highlight_veg.unwrap_or(defaults.highlight_veg),
         highlight_lactose_free: raw
             .highlight_lactose_free
@@ -140,6 +152,8 @@ pub fn normalize_theme(value: &str) -> String {
         "dark" => "dark".to_string(),
         "blue" => "blue".to_string(),
         "green" => "green".to_string(),
+        "teletext1" => "teletext1".to_string(),
+        "teletext2" => "teletext2".to_string(),
         _ => "dark".to_string(),
     }
 }
