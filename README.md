@@ -1,6 +1,6 @@
 # Lunch Plasmoid
 
-System tray KDE Plasma widget for UEF Kuopio lunch menus.
+Unofficial system tray KDE Plasma widget for UEF Kuopio lunch menus.
 
 ## Features
 
@@ -64,11 +64,15 @@ See [Releases](https://github.com/veetir/compass-lunch-plasmoid/releases) for
 exe downloads.
 
 ### Features
-- Left-click tray icon to open/close the widget
-- Navigate restaurants with header buttons, mouse wheel, or `Left/Right` (`A`/`D`)
+- Navigate restaurants with mouse wheel, header buttons, or `Left/Right` (`A`/`D`)
 - Toggle allergens, diet highlights, and price groups
-- Themes: dark, light, blue, green
-- Manual/automatic refresh with cache fallback
+- Themes: dark, light, blue, green, ...
+- Automatic/manual refresh
 - Run at startup
 
 ![Compass Lunch screenshot](windows-tray/assets/windows.png)
+
+
+-----
+
+This project is not affiliated with or endorsed by the University of Eastern Finland or any listed restaurant operators.
